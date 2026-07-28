@@ -71,6 +71,9 @@ window.__PM = {
         pendingMoves: [...m.pendingMoves],
         friendship: m.friendship,
         ability: m.ability,
+        exp: m.exp,
+        expNext: expForLevel(growthOf(m), m.level + 1),
+        shiny: m.shiny,
       })),
       storageCount: game.storage.length,
       storage: game.storage.map((m) => ({ species: m.species, level: m.level, isEgg: !!m.isEgg })),
@@ -83,6 +86,7 @@ window.__PM = {
       battle: game.battle
         ? {
             phase: game.battlePhase,
+            menuIndex: game.battleMenuIndex,
             message: game.battleMsgs[0] ?? null,
             outcome: game.battle.outcome,
             isTrainer: game.battle.isTrainer,
@@ -129,8 +133,35 @@ window.__PM = {
         healFull(m);
       }
     },
-    givemon(species: string, level: number) {
-      if (game.party.length < 6) game.party.push(createMockemon(species, level));
+    givemon(species: string, level: number, shiny = false) {
+      if (game.party.length >= 6) return;
+      const m = createMockemon(species, level);
+      m.shiny = shiny;
+      game.party.push(m);
+    },
+    setFriendship(partyIndex: number, value: number) {
+      const m = game.party[partyIndex];
+      if (m) m.friendship = value;
+    },
+    addExp(partyIndex: number, amount: number) {
+      const m = game.party[partyIndex];
+      if (m) gainExp(m, amount);
+    },
+    setHp(partyIndex: number, hp: number) {
+      const m = game.party[partyIndex];
+      if (m) m.hp = Math.max(1, Math.min(m.maxHp, hp));
+    },
+    setEnemyHp(hp: number) {
+      const b = game.battle;
+      if (b) b.enemy.hp = Math.max(1, Math.min(b.enemy.maxHp, hp));
+    },
+    rollEncounters(n: number) {
+      const counts: Record<string, number> = {};
+      for (let i = 0; i < n; i++) {
+        const sp = game.rollEncounter().species;
+        counts[sp] = (counts[sp] ?? 0) + 1;
+      }
+      return counts;
     },
     addItem(item: string, n: number) {
       game.inventory[item] = (game.inventory[item] ?? 0) + n;

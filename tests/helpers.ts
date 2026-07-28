@@ -25,6 +25,9 @@ export interface PMState {
     pendingMoves: string[];
     friendship: number;
     ability: string;
+    exp: number;
+    expNext: number;
+    shiny: boolean;
   }[];
   storageCount: number;
   storage: { species: string; level: number; isEgg: boolean }[];
@@ -36,6 +39,7 @@ export interface PMState {
   menu: { title: string; items: string[]; index: number } | null;
   battle: {
     phase: string;
+    menuIndex: number;
     message: string | null;
     outcome: string | null;
     isTrainer: boolean;
@@ -58,7 +62,12 @@ declare global {
         noEncounters: (on: boolean) => void;
         warp: (map: string, x: number, y: number) => void;
         setPartyLevels: (level: number) => void;
-        givemon: (species: string, level: number) => void;
+        givemon: (species: string, level: number, shiny?: boolean) => void;
+        setFriendship: (partyIndex: number, value: number) => void;
+        setHp: (partyIndex: number, hp: number) => void;
+        setEnemyHp: (hp: number) => void;
+        rollEncounters: (n: number) => Record<string, number>;
+        addExp: (partyIndex: number, amount: number) => void;
         addItem: (item: string, n: number) => void;
         healAll: () => void;
         clearInput: () => void;

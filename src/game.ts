@@ -5,7 +5,7 @@ import { ITEMS, SHOP_STOCK } from './data/items';
 import { ABILITIES } from './data/abilities';
 import { TYPE_COLORS } from './data/types';
 import { consumePress, isHeld, type Key } from './input';
-import { MAPS, SOLID_TILES, type GameMap, type Npc } from './maps';
+import { MAPS, SOLID_TILES, type EncounterEntry, type GameMap, type Npc } from './maps';
 import { checkEvolution } from './evolution';
 import { breedError, canBreed, makeEgg, tickEgg } from './breeding';
 import { formatTime, phaseFor, tintFor } from './daynight';
@@ -812,11 +812,10 @@ export class Game {
     });
   }
 
-  startWildBattle(): void {
+  rollEncounter(): EncounterEntry {
     const table = this.map.encounters;
     const night = phaseFor(this.minute) === 'night';
-    const weightOf = (e: (typeof table)[number]): number =>
-      night ? (e.nightWeight ?? e.weight * 0.25) : e.weight;
+    const weightOf = (e: EncounterEntry): number => (night ? (e.nightWeight ?? e.weight * 0.25) : e.weight);
     const total = table.reduce((s, e) => s + weightOf(e), 0);
     let roll = rand() * total;
     let entry = table[0];
@@ -827,6 +826,11 @@ export class Game {
         break;
       }
     }
+    return entry;
+  }
+
+  startWildBattle(): void {
+    const entry = this.rollEncounter();
     const mon = createMockemon(entry.species, randInt(entry.minLv, entry.maxLv));
     this.seenSpecies.add(mon.species);
     this.beginBattle({ kind: 'wild', mon }, (outcome) => {
