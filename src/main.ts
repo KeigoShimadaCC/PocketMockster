@@ -1,6 +1,7 @@
 import { Game } from './game';
 import { clearInput, initInput, virtualPress, type Key } from './input';
-import { createMockemon, gainExp, expForLevel, healFull } from './mockemon';
+import { createMockemon, gainExp, expForLevel, healFull, movesAtLevel } from './mockemon';
+import { MOVES } from './data/moves';
 import { setSeed } from './rng';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
@@ -81,11 +82,13 @@ window.__PM = {
             active: {
               species: game.battle.active.species,
               hp: game.battle.active.hp,
+              moves: game.battle.active.moves.map((ms) => ms.id),
             },
           }
         : null,
       seen: game.seenSpecies.size,
       caught: game.caughtSpecies.size,
+      defeated: [...game.defeatedTrainers],
       endingShown: game.endingShown,
     };
   },
@@ -109,6 +112,7 @@ window.__PM = {
         m.exp = expForLevel(level);
         m.level = level;
         gainExp(m, 0);
+        m.moves = movesAtLevel(m.species, level).map((id) => ({ id, pp: MOVES[id].pp }));
         healFull(m);
       }
     },

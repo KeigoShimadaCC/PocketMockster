@@ -18,6 +18,8 @@ const KEYMAP: Record<string, Key> = {
   x: 'b',
   Escape: 'b',
   Backspace: 'b',
+  m: 'start',
+  Shift: 'start',
 };
 
 export function initInput(): void {

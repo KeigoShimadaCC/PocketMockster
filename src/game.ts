@@ -266,6 +266,11 @@ export class Game {
   onStepComplete(): void {
     // warps
     const warp = this.map.warps.find((w) => w.x === this.px && w.y === this.py);
+    if (warp && warp.to === 'route1' && this.mapId === 'mapletown' && !this.flags.starterChosen) {
+      this.py += 1;
+      this.showDialogue(["It's dangerous to go out without a Mockemon! Visit Prof. Maple's lab first."]);
+      return;
+    }
     if (warp) {
       this.mapId = warp.to;
       this.px = warp.tx;
@@ -336,6 +341,16 @@ export class Game {
     if (npc) {
       this.talkTo(npc);
       return;
+    }
+    // talk over counters
+    if (this.tileAt(tx, ty) === 'C') {
+      const beyond = this.map.npcs.find(
+        (n) => n.x === tx + dx && n.y === ty + dy && this.npcVisible(n),
+      );
+      if (beyond) {
+        this.talkTo(beyond);
+        return;
+      }
     }
     const sign = this.map.signs.find((s) => s.x === tx && s.y === ty);
     if (sign) {
@@ -501,10 +516,11 @@ export class Game {
               ]);
             } else if (outcome === 'lose') {
               this.flags.rivalBeaten = true;
+              for (const m of this.party) healFull(m);
               this.showDialogue([
                 'KAI: Heh! Exactly as I planned!',
                 'Kai strutted out of the lab.',
-                'PROF. MAPLE: Do not be discouraged. Rest up and head north when you are ready.',
+                'PROF. MAPLE: Do not be discouraged. I healed your Mockemon. Head north when you are ready.',
               ]);
             }
           },
@@ -570,8 +586,10 @@ export class Game {
       if (outcome === 'caught' && this.battle?.caughtMon) {
         const caught = this.battle.caughtMon;
         this.caughtSpecies.add(caught.species);
-        if (this.party.length < 6) this.party.push(caught);
-        else {
+        if (this.party.length < 6) {
+          this.party.push(caught);
+          this.showDialogue([`${caught.nickname} was added to your party!`]);
+        } else {
           this.storage.push(caught);
           this.showDialogue([`Your party is full! ${caught.nickname} was sent to storage.`]);
         }
@@ -943,7 +961,7 @@ export class Game {
       const sel = i === this.titleIndex;
       text(ctx, (sel ? '> ' : '  ') + o, 240, 235 + i * 24, sel ? '#ffd93b' : '#c0cbdc', 16, true);
     });
-    text(ctx, 'Arrows/WASD move · Z/Enter OK · X/Esc back', 240, 300, '#8fa3c0', 11, true);
+    text(ctx, 'Arrows/WASD move · Z/Enter OK · X/Esc back · M menu', 240, 300, '#8fa3c0', 11, true);
   }
 
   renderOverworld(): void {

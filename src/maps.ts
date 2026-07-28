@@ -144,8 +144,8 @@ export const MAPS: Record<string, GameMap> = {
       'wwwwwwwwwwww',
       'wFFFFFFFFFFw',
       'wFCCFFFFCCFw',
-      'wFFFFFFFFFFw',
       'wFFFPPPFFFFw',
+      'wFFFFFFFFFFw',
       'wFFFFFFFFFFw',
       'wFFFFFFFFFFw',
       'wFFFFFFFFFFw',
@@ -160,7 +160,7 @@ export const MAPS: Record<string, GameMap> = {
       {
         id: 'professor',
         x: 5,
-        y: 3,
+        y: 4,
         spriteKey: 'professor',
         facing: 'down',
         action: 'starter',
