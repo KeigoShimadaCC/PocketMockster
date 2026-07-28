@@ -317,6 +317,16 @@ export const SCRIPTS: Record<string, ScriptCmd[]> = {
       else: [
         { t: 'setFlag', flag: 'originonAwakenSeen' },
         { t: 'say', lines: ['A blinding light erupts from the peak!', 'Originon stirs from its ancient slumber...', 'The very fabric of the region shimmers with raw data!'] },
+        {
+          t: 'if',
+          flag: 'originonObtained',
+          then: [{ t: 'say', lines: ['Originon resonates with the shrine, but it has already chosen you.'] }],
+          else: [
+            { t: 'giveMon', species: 'originon', level: 54 },
+            { t: 'setFlag', flag: 'originonObtained' },
+            { t: 'say', lines: ['Originon regards you with ancient eyes...', 'It has chosen to join you. You received an ORIGINON!', 'The first Mockemon ever recorded in the Ledger, now by your side.'] },
+          ],
+        },
       ],
     },
   ],
@@ -329,6 +339,54 @@ export const SCRIPTS: Record<string, ScriptCmd[]> = {
         { t: 'setFlag', flag: 'championIntroSeen' },
         { t: 'say', lines: ['CHAMPION KAI: You made it. I knew you would.', 'Eight badges. Team Rollback stopped. And now, one final battle.', 'Let us see who truly deserves the title of Champion!'] },
       ],
+    },
+  ],
+  maple_postgame: [
+    {
+      t: 'if',
+      flag: 'postGame',
+      then: [
+        {
+          t: 'if',
+          flag: 'dexReward40',
+          then: [{ t: 'say', lines: ['MAPLE: You have caught every known Mockemon in the Mocca region!', 'That is a feat worthy of a true Champion. The Ledger is complete!'] }],
+          else: [
+            {
+              t: 'if',
+              flag: 'dexReward30',
+              then: [{ t: 'say', lines: ['MAPLE: 30 species caught! Remarkable!', 'Keep exploring. The Ledger has more secrets to reveal.'] }],
+              else: [
+                {
+                  t: 'if',
+                  flag: 'dexReward20',
+                  then: [
+                    { t: 'setFlag', flag: 'dexReward30' },
+                    { t: 'giveItem', item: 'safetysash', count: 1 },
+                    { t: 'say', lines: ['MAPLE: You have caught 30 species! Incredible!', 'Take this Safety Sash. It could save your ace in a tight spot.'] },
+                  ],
+                  else: [
+                    {
+                      t: 'if',
+                      flag: 'dexReward10',
+                      then: [
+                        { t: 'setFlag', flag: 'dexReward20' },
+                        { t: 'giveItem', item: 'powerband', count: 1 },
+                        { t: 'say', lines: ['MAPLE: 20 species caught! You are building a impressive MockDex.', 'Here, take this Power Band. It boosts Attack in a pinch!'] },
+                      ],
+                      else: [
+                        { t: 'setFlag', flag: 'dexReward10' },
+                        { t: 'giveItem', item: 'luckycharm', count: 1 },
+                        { t: 'say', lines: ['MAPLE: Welcome back, Champion!', 'You have been recording data for the MockDex, I see.', '10 species caught already! Take this Lucky Charm. It boosts EXP earned by 50%.', 'Keep filling those pages. I have rewards for 20, 30, and even 40 species!'] },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      else: [{ t: 'say', lines: ['MAPLE: Your journey is just beginning. Come back when you have made progress!'] }],
     },
   ],
 };
