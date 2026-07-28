@@ -4,7 +4,7 @@ import { SPECIES } from './data/species';
 import { TYPE_COLORS } from './data/types';
 import { consumePress, isHeld, type Key } from './input';
 import { MAPS, SOLID_TILES, type GameMap, type Npc } from './maps';
-import { createMockemon, def, healFull, expForLevel, type Mockemon } from './mockemon';
+import { createMockemon, def, healFull, expForLevel, growthOf, type Mockemon } from './mockemon';
 import { chance, rand, randInt } from './rng';
 import { drawSprite, MON_SPRITES, PEOPLE } from './sprites';
 
@@ -1238,7 +1238,7 @@ export class Game {
     text(ctx, `HP  ${m.hp}/${m.maxHp}`, 160, 92, '#ffffff', 12);
     text(ctx, `ATK ${m.atk}   DEF ${m.def}`, 160, 112, '#ffffff', 12);
     text(ctx, `SPA ${m.spa}   SPD ${m.spd}   SPE ${m.spe}`, 160, 132, '#ffffff', 12);
-    text(ctx, `EXP ${m.exp}  (next: ${expForLevel(m.level + 1)})`, 160, 152, '#8fa3c0', 11);
+    text(ctx, `EXP ${m.exp}  (next: ${expForLevel(growthOf(m), m.level + 1)})`, 160, 152, '#8fa3c0', 11);
     text(ctx, 'MOVES', 30, 190, '#ffd93b', 13);
     m.moves.forEach((ms, i) => {
       const mv = MOVES[ms.id];
@@ -1282,8 +1282,8 @@ export class Game {
     hpBar(ctx, 270, 178, 170, mine.hp / mine.maxHp);
     text(ctx, `${mine.hp}/${mine.maxHp}`, 270, 202, '#ffffff', 11);
     if (mine.status) text(ctx, mine.status, 420, 202, '#e63946', 10);
-    const expNow = mine.exp - expForLevel(mine.level);
-    const expNext = expForLevel(mine.level + 1) - expForLevel(mine.level);
+    const expNow = mine.exp - expForLevel(growthOf(mine), mine.level);
+    const expNext = expForLevel(growthOf(mine), mine.level + 1) - expForLevel(growthOf(mine), mine.level);
     ctx.fillStyle = '#29366f';
     ctx.fillRect(270, 210, 170, 6);
     ctx.fillStyle = '#4a9fd8';

@@ -1,6 +1,6 @@
 import { Game } from './game';
 import { clearInput, initInput, virtualPress, type Key } from './input';
-import { createMockemon, gainExp, expForLevel, healFull, movesAtLevel } from './mockemon';
+import { createMockemon, gainExp, expForLevel, growthOf, healFull, movesAtLevel } from './mockemon';
 import { MOVES } from './data/moves';
 import { setSeed } from './rng';
 
@@ -109,7 +109,7 @@ window.__PM = {
     },
     setPartyLevels(level: number) {
       for (const m of game.party) {
-        m.exp = expForLevel(level);
+        m.exp = expForLevel(growthOf(m), level);
         m.level = level;
         gainExp(m, 0);
         m.moves = movesAtLevel(m.species, level).map((id) => ({ id, pp: MOVES[id].pp }));
