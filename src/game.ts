@@ -1118,9 +1118,9 @@ export class Game {
             const stone = this.pendingStone;
             const evoTo = checkEvolution(mon, { kind: 'stone', stone });
             if (!evoTo) {
-              this.showDialogue(['It would not have any effect.'], () => this.openPartyMenu(null, false));
               this.pendingStone = null;
-              this.mode = 'overworld';
+              this.closeAllMenus();
+              this.showDialogue(['It would not have any effect.']);
               return;
             }
             this.inventory[stone]--;

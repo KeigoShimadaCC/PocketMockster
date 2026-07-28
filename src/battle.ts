@@ -172,7 +172,7 @@ export class Battle {
   private damage(user: Mockemon, target: Mockemon, move: MoveDef, userSide: Side, msgs: string[]): number {
     const uSide = this.sides[userSide];
     const tSide = this.sides[this.other(userSide)];
-    let eff = this.typeEffectiveness(move, target);
+    const eff = this.typeEffectiveness(move, target);
     // ability-based immunities / absorptions
     if (move.type === 'Ground' && (target.ability === 'airborne') && eff > 0) {
       msgs.push(`${displayName(target)} is immune thanks to Airborne!`);
@@ -893,10 +893,10 @@ export class Battle {
     }
 
     // order
-    let playerFirst = true;
+    let playerFirst: boolean;
     if (playerActs && playerMoveId && !enemySkippedForPotion && enemyMoveId) {
       let pPri = MOVES[playerMoveId].priority ?? 0;
-      let ePri = MOVES[enemyMoveId].priority ?? 0;
+      const ePri = MOVES[enemyMoveId].priority ?? 0;
       if (this.active.heldItem === 'swiftfeather' && chance(0.2)) {
         pPri += 1;
         msgs.push(`${displayName(this.active)}'s Swift Feather let it move first!`);

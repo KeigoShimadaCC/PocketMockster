@@ -153,14 +153,14 @@ export async function settle(page: Page, maxIter = 200): Promise<void> {
 // forced switches, and returning every battle message observed.
 export async function battleLoop(
   page: Page,
-  opts: { moveIndex?: number; preferMoves?: string[]; maxTurns?: number } = {},
+  opts: { moveIndex?: number; preferMoves?: string[]; maxTurns?: number; skipSettle?: boolean } = {},
 ): Promise<string[]> {
   const messages: string[] = [];
   const maxIter = (opts.maxTurns ?? 60) * 12;
   for (let i = 0; i < maxIter; i++) {
     const s = await state(page);
     if (!s.battle || s.mode !== 'battle') {
-      await settle(page);
+      if (!opts.skipSettle) await settle(page);
       return messages;
     }
     const b = s.battle;
