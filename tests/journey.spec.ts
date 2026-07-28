@@ -3,6 +3,7 @@ import {
   advanceDialogue,
   battleLoop,
   newGameWithStarter,
+  pickMenu,
   press,
   state,
   waitMode,
@@ -169,8 +170,7 @@ test('full playthrough: starter to first gym badge', async ({ page }) => {
   // --- Act 6: save and continue ---
   await press(page, 'start');
   await waitMode(page, 'menu');
-  await press(page, 'down', 4); // SAVE is the 5th item now
-  await press(page, 'a');
+  await pickMenu(page, 'SAVE');
   await advanceDialogue(page);
   await page.goto('/?seed=777&noenc=1');
   await page.waitForFunction(() => !!window.__PM);

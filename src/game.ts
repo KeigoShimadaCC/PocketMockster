@@ -5,7 +5,7 @@ import { ITEMS, SHOP_STOCK } from './data/items';
 import { ABILITIES } from './data/abilities';
 import { TYPE_COLORS } from './data/types';
 import { consumePress, isHeld, type Key } from './input';
-import { MAPS, SOLID_TILES, type EncounterEntry, type GameMap, type Npc } from './maps';
+import { MAPS, SOLID_TILES, type EncounterEntry, type GameMap, type MapEvent, type Npc } from './maps';
 import { checkEvolution } from './evolution';
 import { breedError, canBreed, makeEgg, tickEgg } from './breeding';
 import { formatTime, phaseFor, tintFor } from './daynight';
@@ -22,6 +22,11 @@ import {
 } from './mockemon';
 import { chance, rand, randInt } from './rng';
 import { drawSprite, MON_SPRITES, PEOPLE } from './sprites';
+import { ScriptRunner, type ScriptHost } from './script';
+import { SCRIPTS } from './content/scripts';
+import { trainerById } from './content/trainers';
+import { QuestLog, type QuestProgress } from './quests';
+import { QUESTS } from './content/quests';
 
 const TILE = 32;
 const VIEW_W = 480;
@@ -29,6 +34,44 @@ const VIEW_H = 320; // gameplay area; a controls bar is drawn below it
 const BAR_H = 32;
 
 export type Facing = 'up' | 'down' | 'left' | 'right';
+
+const SAVE_VERSION = 2;
+
+interface SaveData {
+  version?: number;
+  quests?: QuestProgress;
+  mapId: string;
+  px: number;
+  py: number;
+  party: Mockemon[];
+  storage?: Mockemon[];
+  inventory?: Record<string, number>;
+  money?: number;
+  badges?: string[];
+  flags?: Record<string, boolean>;
+  defeatedTrainers?: string[];
+  collectedItems?: string[];
+  healPoint?: { map: string; x: number; y: number };
+  seen?: string[];
+  caught?: string[];
+  minute?: number;
+  daycare?: (Mockemon | null)[];
+  daycareSteps?: number;
+  daycareEgg?: Mockemon | null;
+}
+
+// v1 saves predate the quest log: rebuild it from the flags/badges they did store.
+function migrateQuests(flags: Record<string, boolean>, badges: string[]): QuestProgress {
+  const log = new QuestLog(QUESTS);
+  if (flags.starterChosen) {
+    log.start('main_journey');
+    log.advance('main_journey', 'parcel');
+  }
+  if (badges.length > 0) log.advance('main_journey', `badge${Math.min(badges.length + 1, 8)}`);
+  if (flags.gotBalls) log.complete('parcel');
+  if (flags.hikerTraded) log.complete('hiker_trade');
+  return log.toJSON();
+}
 
 function itemName(id: string): string {
   return ITEMS[id]?.name ?? id;
@@ -55,7 +98,7 @@ type Mode =
 
 type BattlePhase = 'msg' | 'action' | 'moves' | 'party' | 'bag';
 
-export class Game {
+export class Game implements ScriptHost {
   ctx: CanvasRenderingContext2D;
   frame = 0;
   mode: Mode = 'title';
@@ -108,6 +151,9 @@ export class Game {
   noEncounters = false;
   endingShown = false;
 
+  scripts = new ScriptRunner();
+  quests = new QuestLog(QUESTS);
+
   constructor(ctx: CanvasRenderingContext2D) {
     this.ctx = ctx;
   }
@@ -149,6 +195,189 @@ export class Game {
     return true;
   }
 
+  // ---------- script host ----------
+
+  runScript(id: string): boolean {
+    const cmds = SCRIPTS[id];
+    if (!cmds || this.scripts.running) return false;
+    this.scripts.run(cmds);
+    return true;
+  }
+
+  fireEvent(event: MapEvent | undefined): boolean {
+    if (!event) return false;
+    if (event.once && this.flags[event.once]) return false;
+    if (!this.runScript(event.script)) return false;
+    if (event.once) this.flags[event.once] = true;
+    return true;
+  }
+
+  isBusy(): boolean {
+    return this.mode !== 'overworld';
+  }
+
+  say(lines: string[], done: () => void): void {
+    this.showDialogue(lines, done);
+  }
+
+  choose(title: string, labels: string[], onPick: (index: number) => void, onCancel: () => void): void {
+    this.openMenu({
+      title,
+      items: labels,
+      index: 0,
+      onSelect: (i) => {
+        this.closeAllMenus();
+        onPick(i);
+      },
+      onCancel: () => {
+        this.closeAllMenus();
+        onCancel();
+      },
+    });
+  }
+
+  getFlag(flag: string): boolean {
+    return !!this.flags[flag];
+  }
+
+  setFlag(flag: string, value: boolean): void {
+    this.flags[flag] = value;
+  }
+
+  hasItem(item: string, count: number): boolean {
+    return (this.inventory[item] ?? 0) >= count;
+  }
+
+  giveItem(item: string, count: number): void {
+    this.inventory[item] = (this.inventory[item] ?? 0) + count;
+  }
+
+  takeItem(item: string, count: number): void {
+    this.inventory[item] = Math.max(0, (this.inventory[item] ?? 0) - count);
+  }
+
+  giveMon(species: string, level: number): void {
+    const mon = createMockemon(species, level);
+    this.seenSpecies.add(mon.species);
+    this.caughtSpecies.add(mon.species);
+    if (this.party.length < 6) this.party.push(mon);
+    else this.storage.push(mon);
+  }
+
+  giveEgg(species: string): void {
+    const egg = createMockemon(species, 5);
+    egg.isEgg = true;
+    egg.hatchSteps = 2560;
+    egg.nickname = 'Egg';
+    if (this.party.length < 6) this.party.push(egg);
+    else this.storage.push(egg);
+  }
+
+  changeMoney(delta: number): void {
+    this.money = Math.max(0, this.money + delta);
+  }
+
+  healParty(): void {
+    for (const m of this.party) healFull(m);
+  }
+
+  setHealPoint(): void {
+    this.healPoint = { map: this.mapId, x: this.px, y: this.py };
+  }
+
+  openShop(stock?: string[], done?: () => void): void {
+    const list = stock ?? SHOP_STOCK;
+    this.openMenu({
+      title: 'MOCK MART',
+      items: list.map((id) => `${itemName(id)}  $${ITEMS[id].price}`),
+      index: 0,
+      info: [`Money: $${this.money}`, 'A: buy 1   B: leave'],
+      onSelect: (i) => {
+        const id = list[i];
+        const price = ITEMS[id].price;
+        if (this.money < price) return;
+        this.money -= price;
+        this.inventory[id] = (this.inventory[id] ?? 0) + 1;
+        this.menu!.info = [`Money: $${this.money}`, `Bought ${itemName(id)}!`];
+      },
+      onCancel: () => {
+        this.closeAllMenus();
+        this.showDialogue(['CLERK: Thank you! Come again!'], done);
+      },
+    });
+  }
+
+  startBattle(trainerId: string, done: (outcome: 'win' | 'lose' | 'run' | 'caught' | null) => void): void {
+    const trainer = trainerById(trainerId);
+    if (!trainer) {
+      done(null);
+      return;
+    }
+    this.beginBattle(
+      {
+        kind: 'trainer',
+        trainer: {
+          name: trainer.name,
+          spriteKey: trainer.spriteKey,
+          party: trainer.party.map((p) => createMockemon(p.species, p.level)),
+          prize: trainer.prize,
+          introText: trainer.introText,
+          defeatText: trainer.defeatText,
+          ai: trainer.ai,
+          potions: trainer.potions,
+        },
+      },
+      (outcome) => {
+        if (outcome === 'win') {
+          this.defeatedTrainers.add(trainer.id);
+          this.money += trainer.prize;
+          this.showDialogue([trainer.defeatText, `You got $${trainer.prize} for winning!`], () =>
+            done('win'),
+          );
+          return;
+        }
+        if (outcome === 'lose') this.whiteOut();
+        done(outcome as 'lose' | 'run' | 'caught' | null);
+      },
+    );
+  }
+
+  warp(map: string, x: number, y: number): void {
+    if (!MAPS[map]) return;
+    this.mapId = map;
+    this.px = x;
+    this.py = y;
+    this.moving = false;
+    this.moveOffX = 0;
+    this.moveOffY = 0;
+  }
+
+  questState(quest: string): { active: boolean; done: boolean; stage: string | null } {
+    return this.quests.state(quest);
+  }
+
+  questStart(quest: string): void {
+    this.quests.start(quest);
+  }
+
+  questAdvance(quest: string, stage?: string): void {
+    this.quests.advance(quest, stage);
+  }
+
+  questComplete(quest: string): void {
+    this.quests.complete(quest);
+    const reward = QUESTS[quest]?.reward;
+    if (!reward) return;
+    if (reward.item) this.giveItem(reward.item, reward.count ?? 1);
+    if (reward.money) this.changeMoney(reward.money);
+    if (reward.mon) this.giveMon(reward.mon.species, reward.mon.level);
+  }
+
+  playCutscene(id: string, done: () => void): void {
+    void id;
+    done();
+  }
+
   tileAt(x: number, y: number): string {
     const rows = this.map.tiles;
     if (y < 0 || y >= rows.length || x < 0 || x >= rows[0].length) return 'T';
@@ -179,6 +408,8 @@ export class Game {
 
   save(): void {
     const data = {
+      version: SAVE_VERSION,
+      quests: this.quests.toJSON(),
       mapId: this.mapId,
       px: this.px,
       py: this.py,
@@ -204,25 +435,32 @@ export class Game {
   load(): boolean {
     const raw = localStorage.getItem('pm_save');
     if (!raw) return false;
-    const d = JSON.parse(raw);
+    let d: SaveData;
+    try {
+      d = JSON.parse(raw) as SaveData;
+    } catch {
+      return false;
+    }
+    if (!d || typeof d !== 'object' || !d.mapId || !MAPS[d.mapId] || !Array.isArray(d.party)) return false;
     this.mapId = d.mapId;
-    this.px = d.px;
-    this.py = d.py;
+    this.px = d.px ?? 5;
+    this.py = d.py ?? 6;
     this.party = d.party;
     this.storage = d.storage ?? [];
-    this.inventory = d.inventory;
-    this.money = d.money;
-    this.badges = d.badges;
-    this.flags = d.flags;
-    this.defeatedTrainers = new Set(d.defeatedTrainers);
-    this.collectedItems = new Set(d.collectedItems);
-    this.healPoint = d.healPoint;
+    this.inventory = d.inventory ?? { potion: 0, superpotion: 0, mockball: 0 };
+    this.money = d.money ?? 3000;
+    this.badges = d.badges ?? [];
+    this.flags = d.flags ?? {};
+    this.defeatedTrainers = new Set(d.defeatedTrainers ?? []);
+    this.collectedItems = new Set(d.collectedItems ?? []);
+    this.healPoint = d.healPoint ?? { map: 'mapletown', x: 7, y: 9 };
     this.seenSpecies = new Set(d.seen ?? []);
     this.caughtSpecies = new Set(d.caught ?? []);
     this.minute = d.minute ?? 600;
     this.daycare = d.daycare ?? [null, null];
     this.daycareSteps = d.daycareSteps ?? 0;
     this.daycareEgg = d.daycareEgg ?? null;
+    this.quests = new QuestLog(QUESTS, d.quests ?? migrateQuests(this.flags, this.badges));
     this.mode = 'overworld';
     return true;
   }
@@ -243,6 +481,11 @@ export class Game {
   // ---------- overworld ----------
 
   updateOverworld(): void {
+    // a running script owns the player: swallow input between its dialogue pages
+    if (this.scripts.running) {
+      consumePress();
+      return;
+    }
     if (this.moving) {
       const speed = 4;
       if (this.moveOffX > 0) this.moveOffX = Math.max(0, this.moveOffX - speed);
@@ -301,8 +544,10 @@ export class Game {
       this.mapId = warp.to;
       this.px = warp.tx;
       this.py = warp.ty;
+      this.fireEvent(this.map.onEnter);
       return;
     }
+    if (this.fireEvent(this.map.events?.find((e) => e.x === this.px && e.y === this.py))) return;
     // ground items
     const item = this.map.items.find(
       (it) => it.x === this.px && it.y === this.py && !this.collectedItems.has(it.id),
@@ -416,42 +661,19 @@ export class Game {
 
   talkTo(npc: Npc): void {
     if (npc.trainer && !this.defeatedTrainers.has(npc.trainer.id)) {
-      if (npc.action === 'gymleader') {
-        this.startTrainerBattle(npc);
-        return;
-      }
       this.startTrainerBattle(npc);
+      return;
+    }
+    if (npc.script) {
+      this.runScript(npc.script);
       return;
     }
     switch (npc.action) {
       case 'starter':
         this.starterDialogue();
         return;
-      case 'heal':
-        this.showDialogue(
-          ['NURSE: Welcome to the Mock Center! Let me heal your Mockemon to full health!', 'NURSE: ... ... ...', 'NURSE: All healed! We hope to see you again!'],
-          () => {
-            for (const m of this.party) healFull(m);
-            this.healPoint = { map: 'center', x: 6, y: 5 };
-          },
-        );
-        return;
       case 'shop':
         this.openShop();
-        return;
-      case 'giveballs':
-        if (!this.flags.gotBalls) {
-          this.flags.gotBalls = true;
-          this.inventory.mockball += 5;
-          this.inventory.potion += 2;
-          this.showDialogue([
-            'OLD MAN: Off to Route 1? A trainer needs MockBalls to catch Mockemon!',
-            'You received 5 MockBalls and 2 Potions!',
-            'OLD MAN: Weaken a wild Mockemon first, then throw the ball. Works even better if they are asleep or paralyzed!',
-          ]);
-        } else {
-          this.showDialogue(['OLD MAN: Catch anything good yet?']);
-        }
         return;
       case 'gymleader': {
         this.showDialogue([
@@ -707,6 +929,9 @@ export class Game {
                 this.flags[`starter_${key}`] = true;
                 this.seenSpecies.add(key);
                 this.caughtSpecies.add(key);
+                this.quests.start('main_journey');
+                this.quests.advance('main_journey', 'parcel');
+                this.quests.start('parcel');
                 this.showDialogue([
                   `You chose ${mon.nickname}!`,
                   'PROF. MAPLE: A fine choice! Raise it with love.',
@@ -797,6 +1022,7 @@ export class Game {
             if (t.id === 'leader_terra') {
               this.flags.gymDone = true;
               this.badges.push('Boulder Badge');
+              this.quests.advance('main_journey', 'badge2');
               after.push('Terra: Take it. The BOULDER BADGE. Proof that your bond is harder than stone.');
               this.showDialogue(after, () => {
                 this.mode = 'ending';
@@ -1067,10 +1293,12 @@ export class Game {
   // ---------- start menu / shop / bag / party ----------
 
   openStartMenu(): void {
+    const objective = this.quests.nextObjective();
     this.openMenu({
       title: 'MENU',
-      items: ['MOCKEMON', 'BAG', 'MOCKDEX', 'STORAGE', 'SAVE', 'EXIT'],
+      items: ['MOCKEMON', 'BAG', 'MOCKDEX', 'QUESTS', 'STORAGE', 'SAVE', 'EXIT'],
       index: 0,
+      info: objective ? ['NEXT:', ...wrap(objective, 34)] : undefined,
       onSelect: (i) => {
         if (i === 0) this.openPartyMenu(null);
         else if (i === 1) this.openBagMenu();
@@ -1078,8 +1306,9 @@ export class Game {
           this.menu = null;
           this.dexIndex = 0;
           this.mode = 'dex';
-        } else if (i === 3) this.openStorageMenu();
-        else if (i === 4) {
+        } else if (i === 3) this.openQuestMenu();
+        else if (i === 4) this.openStorageMenu();
+        else if (i === 5) {
           this.save();
           this.closeAllMenus();
           this.showDialogue(['Your progress was saved!']);
@@ -1087,6 +1316,27 @@ export class Game {
       },
       onCancel: () => this.closeAllMenus(),
     });
+  }
+
+  openQuestMenu(): void {
+    const active = this.quests.active();
+    const done = this.quests.completed();
+    const entries = [...active, ...done];
+    this.openMenu(
+      {
+        title: 'QUEST LOG',
+        items: entries.length > 0 ? entries.map((q) => `${this.quests.state(q.id).done ? '[x]' : '[ ]'} ${q.title}`) : ['(no quests yet)'],
+        index: 0,
+        info: entries.length > 0 ? wrap(this.quests.journal(entries[0].id).slice(-1)[0] ?? '', 34) : undefined,
+        onSelect: (i) => {
+          const q = entries[i];
+          if (!q) return;
+          this.menu!.info = wrap(this.quests.journal(q.id).slice(-1)[0] ?? '', 34);
+        },
+        onCancel: () => this.closeMenu(),
+      },
+      true,
+    );
   }
 
   partyEntryLabel(m: Mockemon): string {
@@ -1333,28 +1583,6 @@ export class Game {
     );
   }
 
-  openShop(): void {
-    const stock = SHOP_STOCK;
-    this.openMenu({
-      title: 'MOCK MART',
-      items: stock.map((id) => `${itemName(id)}  $${ITEMS[id].price}`),
-      index: 0,
-      info: [`Money: $${this.money}`, 'A: buy 1   B: leave'],
-      onSelect: (i) => {
-        const id = stock[i];
-        const price = ITEMS[id].price;
-        if (this.money < price) return;
-        this.money -= price;
-        this.inventory[id] = (this.inventory[id] ?? 0) + 1;
-        this.menu!.info = [`Money: $${this.money}`, `Bought ${itemName(id)}!`];
-      },
-      onCancel: () => {
-        this.closeAllMenus();
-        this.showDialogue(['CLERK: Thank you! Come again!']);
-      },
-    });
-  }
-
   // ---------- update ----------
 
   update(): void {
@@ -1429,6 +1657,7 @@ export class Game {
         break;
       }
     }
+    this.scripts.update(this);
   }
 
   // ---------- render ----------

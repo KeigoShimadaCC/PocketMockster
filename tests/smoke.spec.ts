@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { advanceDialogue, newGameWithStarter, press, state, waitMode } from './helpers';
+import { advanceDialogue, newGameWithStarter, pickMenu, press, state, waitMode } from './helpers';
 
 test('title screen loads', async ({ page }) => {
   await page.goto('/?seed=42&noenc=1');
@@ -56,8 +56,7 @@ test('save and continue restores progress', async ({ page }) => {
   // open start menu and save
   await press(page, 'start');
   await waitMode(page, 'menu');
-  await press(page, 'down', 4); // SAVE is the 5th item now
-  await press(page, 'a');
+  await pickMenu(page, 'SAVE');
   await waitMode(page, 'dialogue');
   await advanceDialogue(page);
   // reload and continue

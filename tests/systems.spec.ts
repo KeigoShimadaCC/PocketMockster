@@ -3,6 +3,7 @@ import {
   advanceDialogue,
   battleLoop,
   newGameWithStarter,
+  pickMenu,
   press,
   settle,
   state,
@@ -240,8 +241,7 @@ test('PC storage deposits and withdraws party members', async ({ page }) => {
   expect(s.party.length).toBe(6);
   await press(page, 'start');
   await waitMode(page, 'menu');
-  await press(page, 'down', 3); // STORAGE
-  await press(page, 'a');
+  await pickMenu(page, 'STORAGE');
   await waitMode(page, 'menu');
   await press(page, 'a'); // DEPOSIT
   await waitMode(page, 'menu');

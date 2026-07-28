@@ -12,7 +12,8 @@
     "test": "vitest run",
     "lint": "eslint .",
     "agent:server": "node tools/agent/pm-server.mjs",
-    "agent:play": "node tools/agent/player.mjs"
+    "agent:play": "node tools/agent/player.mjs",
+    "validate:content": "tsx tools/validate-content.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

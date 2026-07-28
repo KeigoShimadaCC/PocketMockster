@@ -1,0 +1,48 @@
+import type { GameMap } from '../types';
+
+export const lab: GameMap = {
+  id: 'lab',
+  name: "Prof. Maple's Lab",
+  indoor: true,
+  tiles: [
+    'wwwwwwwwwwww',
+    'wFFFFFFFFFFw',
+    'wFCCFFFFCCFw',
+    'wFFFPPPFFFFw',
+    'wFFFFFFFFFFw',
+    'wFFFFFFFFFFw',
+    'wFFFFFFFFFFw',
+    'wFFFFFFFFFFw',
+    'wFFFFFMMFFFw',
+    'wwwwwwwwwwww',
+  ],
+  warps: [
+    { x: 6, y: 8, to: 'mapletown', tx: 7, ty: 9 },
+    { x: 7, y: 8, to: 'mapletown', tx: 7, ty: 9 },
+  ],
+  npcs: [
+    {
+      id: 'professor',
+      x: 5,
+      y: 4,
+      spriteKey: 'professor',
+      facing: 'down',
+      action: 'starter',
+      dialogue: [],
+    },
+    {
+      id: 'rival',
+      x: 8,
+      y: 6,
+      spriteKey: 'rival',
+      facing: 'left',
+      dialogue: ['Kai: Heh. Pick your Mockemon already, slowpoke!'],
+      hiddenAfterFlag: 'rivalBeaten',
+    },
+  ],
+  items: [],
+  encounters: [],
+  encounterRate: 0,
+  signs: [],
+  lockedDoors: [],
+};

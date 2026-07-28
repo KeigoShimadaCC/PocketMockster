@@ -84,7 +84,9 @@ window.__PM = {
       daycare: game.daycare.map((m) => (m ? { species: m.species, level: m.level } : null)),
       daycareEgg: !!game.daycareEgg,
       dialogue: game.dialogueQueue[0] ?? null,
-      menu: game.menu ? { title: game.menu.title, items: game.menu.items, index: game.menu.index } : null,
+      menu: game.menu
+        ? { title: game.menu.title, items: game.menu.items, index: game.menu.index, info: game.menu.info ?? null }
+        : null,
       battle: game.battle
         ? {
             phase: game.battlePhase,
@@ -105,6 +107,13 @@ window.__PM = {
             },
           }
         : null,
+      healPoint: game.healPoint,
+      objective: game.quests.nextObjective(),
+      activeQuests: game.quests.active().map((q) => q.id),
+      completedQuests: game.quests.completed().map((q) => q.id),
+      questStages: Object.fromEntries(
+        [...game.quests.active(), ...game.quests.completed()].map((q) => [q.id, game.quests.state(q.id).stage]),
+      ),
       seen: game.seenSpecies.size,
       caught: game.caughtSpecies.size,
       defeated: [...game.defeatedTrainers],
@@ -178,6 +187,9 @@ window.__PM = {
     setEnemyHp(hp: number) {
       const b = game.battle;
       if (b) b.enemy.hp = Math.max(1, Math.min(b.enemy.maxHp, hp));
+    },
+    runScript(id: string) {
+      return game.runScript(id);
     },
     rollEncounters(n: number) {
       const counts: Record<string, number> = {};

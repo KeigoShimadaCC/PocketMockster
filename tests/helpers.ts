@@ -36,7 +36,7 @@ export interface PMState {
   daycare: ({ species: string; level: number } | null)[];
   daycareEgg: boolean;
   dialogue: string | null;
-  menu: { title: string; items: string[]; index: number } | null;
+  menu: { title: string; items: string[]; index: number; info: string[] | null } | null;
   battle: {
     phase: string;
     menuIndex: number;
@@ -46,6 +46,11 @@ export interface PMState {
     enemy: { species: string; level: number; hp: number; maxHp: number };
     active: { species: string; hp: number; moves: { id: string; pp: number }[] };
   } | null;
+  healPoint: { map: string; x: number; y: number };
+  objective: string | null;
+  activeQuests: string[];
+  completedQuests: string[];
+  questStages: Record<string, string | null>;
   seen: number;
   caught: number;
   defeated: string[];
@@ -66,6 +71,7 @@ declare global {
         setFriendship: (partyIndex: number, value: number) => void;
         setHp: (partyIndex: number, hp: number) => void;
         setEnemyHp: (hp: number) => void;
+        runScript: (id: string) => boolean;
         rollEncounters: (n: number) => Record<string, number>;
         addExp: (partyIndex: number, amount: number) => void;
         addItem: (item: string, n: number) => void;
@@ -92,6 +98,18 @@ export async function press(page: Page, key: string, times = 1): Promise<void> {
     await page.evaluate((k) => window.__PM.press(k), key);
     await page.waitForTimeout(60);
   }
+}
+
+// Pick a menu entry by its label so menu ordering changes never break tests.
+export async function pickMenu(page: Page, label: string): Promise<void> {
+  const s = await state(page);
+  const items = s.menu?.items ?? [];
+  const idx = items.findIndex((it) => it.toUpperCase().includes(label.toUpperCase()));
+  if (idx < 0) throw new Error(`menu entry "${label}" not found in ${JSON.stringify(items)}`);
+  const cur = s.menu?.index ?? 0;
+  const steps = (idx - cur + items.length) % items.length;
+  await press(page, 'down', steps);
+  await press(page, 'a');
 }
 
 export async function waitMode(page: Page, mode: string, timeout = 15000): Promise<void> {
