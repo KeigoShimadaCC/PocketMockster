@@ -192,7 +192,7 @@ const list: SpeciesDef[] = [
     eggGroups: ['Mineral'], eggMoves: [],
     abilities: ['rocksolid'], evYield: { def: 2 },
     learnset: [
-      { lv: 1, move: 'tackle' }, { lv: 1, move: 'harden' }, { lv: 8, move: 'mudslap' },
+      { lv: 1, move: 'tackle' }, { lv: 1, move: 'harden' }, { lv: 12, move: 'mudslap' },
       { lv: 12, move: 'rockthrow' }, { lv: 16, move: 'rocktomb' }, { lv: 18, move: 'stealthrock' },
       { lv: 20, move: 'dig' }, { lv: 22, move: 'sandstorm' },
     ],

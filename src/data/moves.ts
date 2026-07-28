@@ -75,7 +75,7 @@ const list: MoveDef[] = [
   { id: 'stealthrock', name: 'Stealth Rock', type: 'Rock', category: 'status', power: 0, accuracy: 999, pp: 20, hazard: 'stealthrock' },
   { id: 'mudslap', name: 'Mud Slap', type: 'Ground', category: 'special', power: 30, accuracy: 100, pp: 10, statChange: { stat: 'acc', stages: -1, target: 'foe', chance: 1 }, contact: false },
   { id: 'sandattack', name: 'Sand Attack', type: 'Ground', category: 'status', power: 0, accuracy: 100, pp: 15, statChange: { stat: 'acc', stages: -1, target: 'foe', chance: 1 } },
-  { id: 'dig', name: 'Dig', type: 'Ground', category: 'physical', power: 70, accuracy: 100, pp: 10, twoTurn: { chargeText: 'burrowed underground!', invulnerable: true } },
+  { id: 'dig', name: 'Dig', type: 'Ground', category: 'physical', power: 80, accuracy: 100, pp: 10, twoTurn: { chargeText: 'burrowed underground!', invulnerable: true } },
   { id: 'spikes', name: 'Spikes', type: 'Ground', category: 'status', power: 0, accuracy: 999, pp: 20, hazard: 'spikes' },
   { id: 'bugbite', name: 'Bug Bite', type: 'Bug', category: 'physical', power: 60, accuracy: 100, pp: 20 },
   { id: 'stringshot', name: 'String Shot', type: 'Bug', category: 'status', power: 0, accuracy: 95, pp: 40, statChange: { stat: 'spe', stages: -1, target: 'foe', chance: 1 } },

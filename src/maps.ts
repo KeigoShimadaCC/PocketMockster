@@ -514,7 +514,7 @@ export const MAPS: Record<string, GameMap> = {
           spriteKey: 'gymleader',
           party: [
             { species: 'pebblit', level: 9 },
-            { species: 'bouldron', level: 11 },
+            { species: 'bouldron', level: 10 },
           ],
           prize: 1500,
           introText:
