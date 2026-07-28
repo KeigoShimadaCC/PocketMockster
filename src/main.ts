@@ -21,9 +21,10 @@ if (params.get('noenc') === '1') game.noEncounters = true;
 let last = 0;
 const STEP = 1000 / 60;
 let acc = 0;
+let speed = 1; // agent/test fast-forward multiplier
 
 function loop(t: number): void {
-  acc += Math.min(100, t - last);
+  acc += Math.min(100, t - last) * speed;
   last = t;
   while (acc >= STEP) {
     game.update();
@@ -48,6 +49,7 @@ window.__PM = {
   state() {
     return {
       mode: game.mode,
+      speed,
       map: game.mapId,
       x: game.px,
       y: game.py,
@@ -112,6 +114,28 @@ window.__PM = {
   debug: {
     setSeed(n: number) {
       setSeed(n);
+    },
+    setSpeed(n: number) {
+      speed = Math.max(0.25, Math.min(20, n));
+    },
+    mapInfo() {
+      const m = game.map;
+      return {
+        id: m.id,
+        name: m.name,
+        width: m.tiles[0].length,
+        height: m.tiles.length,
+        tiles: m.tiles,
+        warps: m.warps.map((w) => ({ x: w.x, y: w.y, to: w.to, tx: w.tx, ty: w.ty })),
+        npcs: m.npcs
+          .filter((n) => game.npcVisible(n))
+          .map((n) => ({ id: n.id, x: n.x, y: n.y, action: n.action ?? null, trainer: !!n.trainer })),
+        items: m.items
+          .filter((it) => !game.collectedItems.has(it.id))
+          .map((it) => ({ x: it.x, y: it.y, item: it.item, count: it.count })),
+        signs: m.signs.map((s) => ({ x: s.x, y: s.y })),
+        player: { x: game.px, y: game.py, facing: game.facing },
+      };
     },
     noEncounters(on: boolean) {
       game.noEncounters = on;
