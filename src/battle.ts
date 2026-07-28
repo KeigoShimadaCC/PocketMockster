@@ -207,7 +207,7 @@ export class Battle {
 
   private grantExp(msgs: string[]): void {
     const fainted = this.enemy;
-    const gain = Math.max(1, Math.floor((SPECIES[fainted.species].expYield * fainted.level) / 7) * (this.isTrainer ? 1.5 : 1));
+    const gain = Math.max(1, Math.floor((SPECIES[fainted.species].expYield * fainted.level) / 3) * (this.isTrainer ? 1.5 : 1));
     const m = this.active;
     msgs.push(`${m.nickname} gained ${Math.floor(gain)} EXP!`);
     const res = gainExp(m, Math.floor(gain));

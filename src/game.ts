@@ -10,7 +10,8 @@ import { drawSprite, MON_SPRITES, PEOPLE } from './sprites';
 
 const TILE = 32;
 const VIEW_W = 480;
-const VIEW_H = 320;
+const VIEW_H = 320; // gameplay area; a controls bar is drawn below it
+const BAR_H = 32;
 
 export type Facing = 'up' | 'down' | 'left' | 'right';
 
@@ -425,10 +426,15 @@ export class Game {
 
   starterDialogue(): void {
     if (this.flags.starterChosen) {
-      this.showDialogue([
-        `PROF. MAPLE: How is ${this.party[0]?.nickname ?? 'your partner'} doing? Treat it well!`,
-        'PROF. MAPLE: Go challenge the Verdant Gym north of Route 1!',
-      ]);
+      this.showDialogue(
+        [
+          `PROF. MAPLE: How is ${this.party[0]?.nickname ?? 'your partner'} doing? Let me have a look... There, all patched up!`,
+          'PROF. MAPLE: Come back any time your team needs healing. And go challenge the Verdant Gym north of Route 1!',
+        ],
+        () => {
+          for (const m of this.party) healFull(m);
+        },
+      );
       return;
     }
     this.showDialogue(
@@ -923,7 +929,7 @@ export class Game {
   render(): void {
     const ctx = this.ctx;
     ctx.fillStyle = '#1a1c2c';
-    ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+    ctx.fillRect(0, 0, VIEW_W, VIEW_H + BAR_H);
     switch (this.mode) {
       case 'title':
         this.renderTitle();
@@ -942,6 +948,25 @@ export class Game {
         if (this.mode === 'dialogue') this.renderDialogue();
         if (this.mode === 'menu') this.renderMenu();
     }
+    this.renderControlsBar();
+  }
+
+  renderControlsBar(): void {
+    const ctx = this.ctx;
+    const hints: Record<Mode, string> = {
+      title: '\u2191\u2193 select   Z/Enter confirm',
+      overworld: '\u2190\u2191\u2193\u2192/WASD move   Z/Enter interact   M/Shift menu',
+      dialogue: 'Z/Enter next',
+      menu: '\u2191\u2193 select   Z/Enter ok   X/Esc back',
+      battle: '\u2190\u2191\u2193\u2192 select   Z/Enter ok   X/Esc back',
+      summary: 'Z/Enter or X/Esc back',
+      ending: 'Z/Enter continue',
+    };
+    ctx.fillStyle = '#11131f';
+    ctx.fillRect(0, VIEW_H, VIEW_W, BAR_H);
+    ctx.fillStyle = '#333c57';
+    ctx.fillRect(0, VIEW_H, VIEW_W, 2);
+    text(ctx, hints[this.mode], VIEW_W / 2, VIEW_H + 21, '#8fa3c0', 12, true);
   }
 
   renderTitle(): void {
@@ -959,9 +984,8 @@ export class Game {
     const options = this.hasSave() ? ['NEW GAME', 'CONTINUE'] : ['NEW GAME'];
     options.forEach((o, i) => {
       const sel = i === this.titleIndex;
-      text(ctx, (sel ? '> ' : '  ') + o, 240, 235 + i * 24, sel ? '#ffd93b' : '#c0cbdc', 16, true);
+      text(ctx, (sel ? '> ' : '  ') + o, 240, 240 + i * 26, sel ? '#ffd93b' : '#c0cbdc', 16, true);
     });
-    text(ctx, 'Arrows/WASD move · Z/Enter OK · X/Esc back · M menu', 240, 300, '#8fa3c0', 11, true);
   }
 
   renderOverworld(): void {

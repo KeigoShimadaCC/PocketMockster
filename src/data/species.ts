@@ -30,7 +30,7 @@ const list: SpeciesDef[] = [
     catchRate: 45, expYield: 64,
     learnset: [
       { lv: 1, move: 'tackle' }, { lv: 3, move: 'growl' }, { lv: 6, move: 'vinewhip' },
-      { lv: 10, move: 'stringshot' }, { lv: 13, move: 'razorleaf' },
+      { lv: 9, move: 'stringshot' }, { lv: 11, move: 'razorleaf' },
     ],
     evolvesTo: 'bramblore', evolveLevel: 15,
     dex: 'A seed sprouts from its head. It photosynthesizes while napping in sunny fields.',
@@ -51,7 +51,7 @@ const list: SpeciesDef[] = [
     catchRate: 45, expYield: 62,
     learnset: [
       { lv: 1, move: 'scratch' }, { lv: 3, move: 'growl' }, { lv: 6, move: 'ember' },
-      { lv: 10, move: 'quickattack' }, { lv: 13, move: 'bite' },
+      { lv: 8, move: 'quickattack' }, { lv: 9, move: 'dig' }, { lv: 13, move: 'bite' },
     ],
     evolvesTo: 'emberuin', evolveLevel: 15,
     dex: 'A bear cub with a smoldering tail tuft. It hugs warm rocks to sleep at night.',
@@ -72,7 +72,7 @@ const list: SpeciesDef[] = [
     catchRate: 45, expYield: 63,
     learnset: [
       { lv: 1, move: 'tackle' }, { lv: 3, move: 'tailwhip' }, { lv: 6, move: 'watergun' },
-      { lv: 10, move: 'harden' }, { lv: 13, move: 'bubblebeam' },
+      { lv: 9, move: 'harden' }, { lv: 12, move: 'bubblebeam' },
     ],
     evolvesTo: 'torrentle', evolveLevel: 15,
     dex: 'It carries a puddle in its shell everywhere. Splashes shyly when startled.',
@@ -139,7 +139,7 @@ const list: SpeciesDef[] = [
   },
   {
     id: 12, key: 'pebblit', name: 'Pebblit', types: ['Rock'],
-    base: { hp: 40, atk: 80, def: 100, spa: 30, spd: 30, spe: 20 },
+    base: { hp: 40, atk: 55, def: 100, spa: 30, spd: 30, spe: 20 },
     catchRate: 255, expYield: 60,
     learnset: [
       { lv: 1, move: 'tackle' }, { lv: 4, move: 'harden' }, { lv: 8, move: 'rockthrow' },
@@ -150,11 +150,11 @@ const list: SpeciesDef[] = [
   },
   {
     id: 13, key: 'bouldron', name: 'Bouldron', types: ['Rock', 'Ground'],
-    base: { hp: 55, atk: 95, def: 115, spa: 45, spd: 45, spe: 35 },
+    base: { hp: 55, atk: 45, def: 130, spa: 45, spd: 45, spe: 35 },
     catchRate: 120, expYield: 100,
     learnset: [
-      { lv: 1, move: 'tackle' }, { lv: 1, move: 'harden' }, { lv: 8, move: 'rockthrow' },
-      { lv: 13, move: 'rocktomb' }, { lv: 16, move: 'mudslap' }, { lv: 20, move: 'dig' },
+      { lv: 1, move: 'tackle' }, { lv: 1, move: 'harden' }, { lv: 8, move: 'mudslap' },
+      { lv: 12, move: 'rockthrow' }, { lv: 16, move: 'rocktomb' }, { lv: 20, move: 'dig' },
     ],
     dex: 'A living boulder that naps for decades. Mountain trails detour around it.',
   },

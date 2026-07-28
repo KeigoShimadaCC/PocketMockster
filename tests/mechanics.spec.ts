@@ -13,8 +13,7 @@ test('water moves are super effective against the rock gym trainer', async ({ pa
   const s = await state(page);
   expect(s.battle?.isTrainer).toBe(true);
   expect(s.battle?.enemy.species).toBe('pebblit');
-  // puddlefin lv12 moves: tackle, tailwhip, watergun, harden -> water gun = index 2
-  const messages = await battleLoop(page, { moveIndex: 2 });
+  const messages = await battleLoop(page, { preferMoves: ['bubblebeam', 'watergun'] });
   expect(messages.join(' | ')).toContain("It's super effective!");
   await advanceDialogue(page);
   const after = await state(page);
