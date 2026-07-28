@@ -648,3 +648,142 @@ describe('trainer AI', () => {
     expect(sandAttacks).toBeLessThanOrEqual(1);
   });
 });
+
+describe('adversarial regressions', () => {
+  it('two-turn moves consume PP once and the release turn is locked to the charging move', () => {
+    const user = mon('nibblex', 30, { moves: [{ id: 'dig', pp: 10 }, { id: 'tackle', pp: 35 }], ability: 'momentum' });
+    const foe = pacifist('bouldron', 30); // high def so dig doesn't one-shot
+    const b = wild(user, foe);
+    const msgs1 = b.takeTurn({ type: 'move', index: 0 }); // charge
+    expect(msgs1.join(' ')).toContain('burrowed');
+    expect(user.moves[0].pp).toBe(9);
+    // pick a DIFFERENT move on the release turn: engine must fire dig anyway
+    const msgs2 = b.takeTurn({ type: 'move', index: 1 });
+    expect(msgs2.join(' ')).toContain('used Dig');
+    expect(msgs2.join(' ')).not.toContain('used Tackle');
+    expect(user.moves[0].pp).toBe(9); // no second PP spent on release
+  });
+
+  it('enemy releases its two-turn move instead of swapping to another', () => {
+    const user = mon('bouldron', 30, { moves: [{ id: 'harden', pp: 40 }] });
+    const foe = mon('nibblex', 30, { moves: [{ id: 'dig', pp: 10 }, { id: 'stringshot', pp: 40 }] });
+    const b = wild(user, foe);
+    b.takeTurn({ type: 'move', index: 0 }); // foe charges dig
+    const msgs = b.takeTurn({ type: 'move', index: 0 });
+    expect(msgs.join(' ')).toContain('Foe Nibblex used Dig');
+    expect(foe.moves[0].pp).toBe(9);
+  });
+
+  it('power band falls back to Struggle when the locked move runs out of PP', () => {
+    const user = mon('nibblex', 30, { moves: [{ id: 'tackle', pp: 1 }], heldItem: 'powerband' });
+    const foe = pacifist('pebblit', 5);
+    const b = wild(user, foe);
+    b.takeTurn({ type: 'move', index: 0 }); // tackle: locks
+    expect(user.moves[0].pp).toBe(0);
+    const msgs = b.takeTurn({ type: 'move', index: 0 });
+    expect(msgs.join(' ')).toContain('Struggle');
+    expect(msgs.join(' ')).not.toContain('Power Band only allows');
+    expect(msgs.join(' ')).not.toContain('No PP left');
+  });
+
+  it('power band lock clears on a voluntary switch', () => {
+    const a = mon('nibblex', 30, { moves: [{ id: 'tackle', pp: 35 }], heldItem: 'powerband' });
+    const c = mon('sproutle', 30, { moves: [{ id: 'vinewhip', pp: 25 }] });
+    const foe = pacifist('pebblit', 5);
+    const b = new Battle([a, c], { kind: 'wild', mon: foe });
+    b.takeTurn({ type: 'move', index: 0 }); // tackle: lock set
+    expect(b.sides.player.choiceLock).toBe('tackle');
+    b.takeTurn({ type: 'switch', index: 1 });
+    expect(b.sides.player.choiceLock).toBeNull();
+    const msgs = b.takeTurn({ type: 'move', index: 0 }); // vine whip works freely
+    expect(msgs.join(' ')).not.toContain('Power Band only allows');
+    expect(msgs.join(' ')).toContain('used Vine Whip');
+  });
+
+  it('simultaneous last-mon KO awards a loss, not a win', () => {
+    const user = mon('nibblex', 30, { moves: [{ id: 'tackle', pp: 0 }] }); // struggle only
+    user.hp = 1; // struggle recoil will finish it
+    const foe = mon('nibbit', 3, { moves: [{ id: 'stringshot', pp: 40 }] });
+    foe.hp = 1;
+    const b = wild(user, foe);
+    const msgs = b.takeTurn({ type: 'move', index: 0 });
+    expect(b.outcome).toBe('lose');
+    expect(msgs.join(' ')).toContain('no more Mockemon');
+  });
+
+  it('ember gut boost resets when the boosted mon leaves the field', () => {
+    const user = mon('flarat', 30, { moves: [{ id: 'scratch', pp: 35 }], ability: 'embergut' });
+    const backup = mon('sproutle', 30, { moves: [{ id: 'tackle', pp: 35 }] });
+    const foe = mon('cindercub', 20, { moves: [{ id: 'ember', pp: 25 }] });
+    const b = new Battle([user, backup], { kind: 'wild', mon: foe });
+    b.takeTurn({ type: 'move', index: 0 }); // ember absorbed -> boost
+    expect(b.sides.player.emberBoost).toBe(true);
+    b.takeTurn({ type: 'switch', index: 1 });
+    expect(b.sides.player.emberBoost).toBe(false);
+  });
+
+  it('menace lowers the foe attack at the very start of battle', () => {
+    const user = mon('nibblex', 30);
+    const foe = mon('fluffowl', 20, { ability: 'menace' });
+    const b = wild(user, foe); // no takeTurn at all
+    expect(b.sides.player.stages.atk).toBe(-1);
+  });
+
+  it('safety sash is consumed on use and each holder gets its own save', () => {
+    const user = mon('nibblex', 50, { moves: [{ id: 'tackle', pp: 35 }], ability: 'momentum' });
+    const foe1 = mon('fluffowl', 10, { moves: [{ id: 'stringshot', pp: 40 }], heldItem: 'safetysash' });
+    const foe2 = mon('fluffowl', 10, { moves: [{ id: 'stringshot', pp: 40 }], heldItem: 'safetysash' });
+    const trainer: TrainerDef = {
+      name: 'T', spriteKey: 'hiker', party: [foe1, foe2], prize: 0, introText: '', defeatText: '',
+    };
+    const b = new Battle([user], { kind: 'trainer', trainer });
+    const msgs1 = b.takeTurn({ type: 'move', index: 0 });
+    expect(msgs1.join(' ')).toContain('Safety Sash');
+    expect(foe1.hp).toBe(1);
+    expect(foe1.heldItem).toBeNull(); // consumed
+    b.takeTurn({ type: 'move', index: 0 }); // finish foe1, foe2 enters
+    const msgs3 = b.takeTurn({ type: 'move', index: 0 });
+    expect(msgs3.join(' ')).toContain('Safety Sash'); // second holder's sash works
+    expect(foe2.hp).toBe(1);
+  });
+
+  it('trainer battle EXP share is always an integer', () => {
+    const user = mon('nibblex', 50, { moves: [{ id: 'tackle', pp: 35 }], ability: 'momentum' });
+    // expYield 50 at lv7: 50*7/3*1.5 = 175.0 exactly? pick lv5: 50*5/3*1.5 = 125; lv4 -> 100; find odd floor case
+    const foe = mon('nibbit', 7, { moves: [{ id: 'stringshot', pp: 40 }] });
+    const trainer: TrainerDef = {
+      name: 'T', spriteKey: 'hiker', party: [foe], prize: 0, introText: '', defeatText: '',
+    };
+    const b = new Battle([user], { kind: 'trainer', trainer });
+    const msgs = b.takeTurn({ type: 'move', index: 0 });
+    const m = msgs.join(' ').match(/gained (\d+(?:\.\d+)?) EXP/);
+    expect(m).not.toBeNull();
+    expect(Number.isInteger(Number(m![1]))).toBe(true);
+  });
+
+  it('voluntary switch into lethal hazards faints the switch-in immediately', () => {
+    const a = mon('nibblex', 30, { moves: [{ id: 'tackle', pp: 35 }], ability: 'momentum' });
+    const weak = mon('nibbit', 5, { moves: [{ id: 'tackle', pp: 35 }] });
+    weak.hp = 1;
+    const backup = mon('sproutle', 30, { moves: [{ id: 'tackle', pp: 35 }] });
+    const foe = pacifist('bouldron', 30);
+    const b = new Battle([a, weak, backup], { kind: 'wild', mon: foe });
+    b.sides.player.stealthRock = true;
+    const msgs = b.takeTurn({ type: 'switch', index: 1 });
+    expect(msgs.join(' ')).toContain('fainted');
+    expect(b.needsSwitch).toBe(true); // not left controlling a corpse
+  });
+
+  it('enemy power band holder is locked into its first move', () => {
+    const user = mon('bouldron', 30, { moves: [{ id: 'harden', pp: 40 }] });
+    const foe = mon('nibblex', 30, { moves: [{ id: 'tackle', pp: 35 }, { id: 'bite', pp: 25 }], heldItem: 'powerband' });
+    const b = wild(user, foe);
+    b.takeTurn({ type: 'move', index: 0 });
+    const lock = b.sides.enemy.choiceLock;
+    expect(lock).not.toBeNull();
+    for (let i = 0; i < 3; i++) {
+      b.takeTurn({ type: 'move', index: 0 });
+      expect(b.sides.enemy.choiceLock).toBe(lock);
+    }
+  });
+});

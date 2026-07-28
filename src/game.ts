@@ -346,7 +346,7 @@ export class Game {
     for (const npc of this.map.npcs) {
       const t = npc.trainer;
       if (!t || t.sight === 0 || this.defeatedTrainers.has(t.id) || !this.npcVisible(npc)) continue;
-      if (this.inSight(npc)) {
+      if (this.inSight(npc) && this.party.some((m) => m.hp > 0 && !m.isEgg)) {
         this.startTrainerBattle(npc);
         return;
       }
@@ -356,7 +356,7 @@ export class Game {
       this.tileAt(this.px, this.py) === 'G' &&
       this.map.encounters.length > 0 &&
       !this.noEncounters &&
-      this.party.some((m) => m.hp > 0) &&
+      this.party.some((m) => m.hp > 0 && !m.isEgg) &&
       chance(this.map.encounterRate)
     ) {
       this.startWildBattle();
@@ -884,9 +884,20 @@ export class Game {
   battleAct(action: PlayerAction): void {
     const b = this.battle!;
     if (action.type === 'item') {
-      if ((this.inventory[action.item] ?? 0) <= 0) {
-        this.battleMsgs = [`You have no ${itemName(action.item)} left!`];
+      const fail = (msg: string): void => {
+        this.battleMsgs = [msg];
         this.battlePhase = 'msg';
+      };
+      if ((this.inventory[action.item] ?? 0) <= 0) {
+        fail(`You have no ${itemName(action.item)} left!`);
+        return;
+      }
+      if (action.item === 'mockball' && b.isTrainer) {
+        fail("Can't catch a trainer's Mockemon!");
+        return;
+      }
+      if ((action.item === 'potion' || action.item === 'superpotion') && b.active.hp >= b.active.maxHp) {
+        fail('It would have no effect.');
         return;
       }
       this.inventory[action.item]--;
@@ -952,7 +963,9 @@ export class Game {
         this.battlePhase = 'action';
         this.battleMenuIndex = 0;
       }
-      if (k === 'a') this.battleAct({ type: 'move', index: struggleOnly ? 0 : this.battleMenuIndex });
+      if (k === 'a' && (struggleOnly || moves[this.battleMenuIndex].pp > 0)) {
+        this.battleAct({ type: 'move', index: struggleOnly ? 0 : this.battleMenuIndex });
+      }
       return;
     }
 

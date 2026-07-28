@@ -80,11 +80,12 @@ export function makeEgg(a: Mockemon, b: Mockemon): Mockemon {
   egg.nature = chance(0.5) ? speciesParent.nature : pick(NATURE_KEYS);
   egg.ability = chance(0.8) ? eggSpeciesDef.abilities[0] : pick(eggSpeciesDef.abilities);
 
+  // egg moves take priority over level-1 moves when the combined list exceeds 4
   const moveIds: string[] = [];
-  for (const id of movesAtLevel(eggSpecies, 1)) {
+  for (const id of eggSpeciesDef.eggMoves) {
     if (!moveIds.includes(id)) moveIds.push(id);
   }
-  for (const id of eggSpeciesDef.eggMoves) {
+  for (const id of movesAtLevel(eggSpecies, 1)) {
     if (!moveIds.includes(id)) moveIds.push(id);
   }
 

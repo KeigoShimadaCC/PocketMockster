@@ -43,7 +43,6 @@ interface SideState {
   charging: string | null; // move id mid-two-turn
   choiceLock: string | null; // power band
   emberBoost: boolean;
-  sashUsed: boolean;
   aiSetupUsed: boolean; // smart+ AI: one stat-move per switch-in
 }
 
@@ -61,7 +60,6 @@ const freshSide = (): SideState => ({
   charging: null,
   choiceLock: null,
   emberBoost: false,
-  sashUsed: false,
   aiSetupUsed: false,
 });
 
@@ -117,6 +115,9 @@ export class Battle {
     const firstAlive = this.party.findIndex((m) => m.hp > 0 && !m.isEgg);
     this.activeIndex = firstAlive < 0 ? 0 : firstAlive;
     this.markParticipant();
+    // on-entry abilities fire for the starting leads too
+    this.onSwitchIn('player', []);
+    this.onSwitchIn('enemy', []);
   }
 
   get active(): Mockemon {
@@ -242,9 +243,9 @@ export class Battle {
       if (target.ability === 'rocksolid') {
         dmg = target.hp - 1;
         msgs.push(`${displayName(target)} hung on with Rock Solid!`);
-      } else if (target.heldItem === 'safetysash' && !tSide.sashUsed) {
+      } else if (target.heldItem === 'safetysash') {
         dmg = target.hp - 1;
-        tSide.sashUsed = true;
+        target.heldItem = null; // the sash is consumed
         msgs.push(`${displayName(target)} hung on using its Safety Sash!`);
       }
     }
@@ -574,8 +575,17 @@ export class Battle {
 
   private enemyPickMove(): string {
     const foe = this.enemy;
+    // mid-charge: must release the two-turn move
+    if (this.sides.enemy.charging) return this.sides.enemy.charging;
     const usable = foe.moves.filter((ms) => ms.pp > 0);
     if (usable.length === 0) return 'struggle';
+    // power band: locked into the first move used
+    if (foe.heldItem === 'powerband' && this.sides.enemy.choiceLock) {
+      const locked = usable.find((ms) => ms.id === this.sides.enemy.choiceLock);
+      if (locked) return locked.id;
+      this.sides.enemy.choiceLock = null;
+      return 'struggle';
+    }
     const tier: AiTier = this.trainer?.ai ?? 'basic';
     if (tier === 'basic') {
       let best = usable[0].id;
@@ -632,7 +642,7 @@ export class Battle {
 
   private grantExp(faintedEnemyIndex: number, msgs: string[]): void {
     const fainted = this.enemyParty[faintedEnemyIndex];
-    const share = Math.max(1, Math.floor((SPECIES[fainted.species].expYield * fainted.level) / 3) * (this.isTrainer ? 1.5 : 1));
+    const share = Math.max(1, Math.floor(((SPECIES[fainted.species].expYield * fainted.level) / 3) * (this.isTrainer ? 1.5 : 1)));
     const involved = this.participants.get(faintedEnemyIndex) ?? new Set<number>();
     for (let i = 0; i < this.party.length; i++) {
       const m = this.party[i];
@@ -702,6 +712,7 @@ export class Battle {
         old.leechSeed = false;
         old.charging = null;
         old.choiceLock = null;
+        old.emberBoost = false;
         old.aiSetupUsed = false;
         this.enemy.toxicCounter = 0;
         msgs.push(`${this.trainer!.name} sent out ${displayName(this.enemy)}!`);
@@ -714,7 +725,13 @@ export class Battle {
         return;
       }
     }
-    this.outcome = 'win';
+    // simultaneous KO with no player mons left standing: the player loses
+    if (this.party.some((m) => m.hp > 0 && !m.isEgg)) {
+      this.outcome = 'win';
+    } else {
+      this.outcome = 'lose';
+      msgs.push('You have no more Mockemon that can fight!');
+    }
   }
 
   private handlePlayerFaint(msgs: string[]): void {
@@ -790,6 +807,7 @@ export class Battle {
     old.leechSeed = false;
     old.charging = null;
     old.choiceLock = null;
+    old.emberBoost = false;
     this.active.toxicCounter = 0;
     this.activeIndex = index;
     this.needsSwitch = false;
@@ -836,12 +854,20 @@ export class Battle {
       const old = this.sides.player;
       old.stages = zeroStages();
       old.confusionTurns = 0;
+      old.flinched = false;
       old.leechSeed = false;
       old.charging = null;
+      old.choiceLock = null;
+      old.emberBoost = false;
       this.active.toxicCounter = 0;
       this.activeIndex = action.index;
       msgs.push(`Go, ${displayName(this.active)}!`);
       this.applyHazards('player', msgs);
+      if (this.active.hp <= 0) {
+        // knocked out by entry hazards on the switch
+        this.handlePlayerFaint(msgs);
+        return msgs;
+      }
       this.onSwitchIn('player', msgs);
     } else if (action.type === 'item') {
       if (action.item === 'mockball') {
@@ -858,6 +884,10 @@ export class Battle {
       if (usable.length === 0) {
         playerMoveId = 'struggle';
         playerActs = true;
+      } else if (pSide.charging) {
+        // release turn of a two-turn move: locked to the charging move
+        playerMoveId = pSide.charging;
+        playerActs = true;
       } else {
         const slot = this.active.moves[action.index];
         if (!slot || slot.pp <= 0) {
@@ -871,12 +901,20 @@ export class Battle {
 
     // choice band lock
     if (playerActs && playerMoveId) {
-      if (this.active.heldItem === 'powerband') {
-        if (pSide.choiceLock && pSide.choiceLock !== playerMoveId) {
-          msgs.push(`Power Band only allows ${MOVES[pSide.choiceLock].name}!`);
-          return msgs;
+      if (this.active.heldItem === 'powerband' && !pSide.charging) {
+        if (pSide.choiceLock) {
+          const lockedSlot = this.active.moves.find((ms) => ms.id === pSide.choiceLock);
+          if (!lockedSlot || lockedSlot.pp <= 0) {
+            // locked move is exhausted: fall back to Struggle
+            pSide.choiceLock = null;
+            playerMoveId = 'struggle';
+          } else if (pSide.choiceLock !== playerMoveId) {
+            msgs.push(`Power Band only allows ${MOVES[pSide.choiceLock].name}!`);
+            return msgs;
+          }
+        } else if (playerMoveId !== 'struggle') {
+          pSide.choiceLock = playerMoveId;
         }
-        pSide.choiceLock = playerMoveId;
       }
     }
 
@@ -889,6 +927,9 @@ export class Battle {
       } else {
         enemyMoveId = this.enemyPickMove();
         if (MOVES[enemyMoveId].statChange) this.sides.enemy.aiSetupUsed = true;
+        if (this.enemy.heldItem === 'powerband' && !this.sides.enemy.choiceLock && enemyMoveId !== 'struggle') {
+          this.sides.enemy.choiceLock = enemyMoveId;
+        }
       }
     }
 
@@ -917,8 +958,9 @@ export class Battle {
       if (!this.sides.player.charging) {
         if (!this.canAct(this.active, 'player', msgs)) return;
       }
+      // PP is consumed when the charge begins, not on the release turn
       const slot = this.active.moves.find((ms) => ms.id === playerMoveId);
-      if (slot && slot.pp > 0) slot.pp--;
+      if (slot && slot.pp > 0 && this.sides.player.charging !== playerMoveId) slot.pp--;
       this.useMove(this.active, this.enemy, playerMoveId, 'player', msgs);
     };
 
@@ -928,7 +970,7 @@ export class Battle {
         if (!this.canAct(this.enemy, 'enemy', msgs)) return;
       }
       const slot = this.enemy.moves.find((ms) => ms.id === enemyMoveId);
-      if (slot && slot.pp > 0) slot.pp--;
+      if (slot && slot.pp > 0 && this.sides.enemy.charging !== enemyMoveId) slot.pp--;
       this.useMove(this.enemy, this.active, enemyMoveId, 'enemy', msgs);
     };
 
