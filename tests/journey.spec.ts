@@ -154,18 +154,11 @@ test('full playthrough: starter to first gym badge', async ({ page }) => {
   expect(s.battle?.isTrainer).toBe(true);
   await battleLoop(page, { preferMoves: ['razorleaf', 'vinewhip', 'tackle'] });
   await advanceDialogue(page);
-  await waitMode(page, 'ending');
+  await waitMode(page, 'overworld');
   s = await state(page);
   expect(s.badges).toContain('Boulder Badge');
   expect(s.flags.gymDone).toBe(true);
   expect(s.money).toBe(moneyBeforeTerra + 1500);
-
-  // dismiss the ending screen and keep playing
-  await press(page, 'a');
-  await advanceDialogue(page);
-  s = await state(page);
-  expect(s.mode).toBe('overworld');
-  expect(s.endingShown).toBe(true);
 
   // --- Act 6: save and continue ---
   await press(page, 'start');

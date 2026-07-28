@@ -5,6 +5,7 @@ import { MOVES } from './data/moves';
 import { phaseFor } from './daynight';
 import { canBreed, makeEgg, tickEgg } from './breeding';
 import { setSeed } from './rng';
+import { introSeen, SLOT_KEYS } from './frontend';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d')!;
@@ -17,6 +18,7 @@ if (seedParam) setSeed(parseInt(seedParam, 10));
 initInput();
 const game = new Game(ctx);
 if (params.get('noenc') === '1') game.noEncounters = true;
+if (!introSeen() && !params.get('noenc')) game.playIntro();
 
 let last = 0;
 const STEP = 1000 / 60;
@@ -50,6 +52,8 @@ window.__PM = {
     return {
       mode: game.mode,
       speed,
+      slot: game.slot,
+      playFrames: game.playFrames,
       map: game.mapId,
       x: game.px,
       y: game.py,
@@ -243,7 +247,7 @@ window.__PM = {
       clearInput();
     },
     clearSave() {
-      localStorage.removeItem('pm_save');
+      for (const k of SLOT_KEYS) localStorage.removeItem(k);
     },
   },
 };

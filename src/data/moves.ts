@@ -89,6 +89,20 @@ const list: MoveDef[] = [
   { id: 'reflect', name: 'Reflect', type: 'Psychic', category: 'status', power: 0, accuracy: 999, pp: 20, screen: 'reflect' },
   { id: 'lightscreen', name: 'Light Screen', type: 'Psychic', category: 'status', power: 0, accuracy: 999, pp: 30, screen: 'lightscreen' },
   { id: 'mend', name: 'Mend', type: 'Psychic', category: 'status', power: 0, accuracy: 999, pp: 10, healSelf: 0.5 },
+  { id: 'signalbeam', name: 'Signal Beam', type: 'Bug', category: 'special', power: 75, accuracy: 100, pp: 15, confuseChance: 0.1 },
+  { id: 'xscissor', name: 'X-Scissor', type: 'Bug', category: 'physical', power: 80, accuracy: 100, pp: 15 },
+  { id: 'tidalcrash', name: 'Tidal Crash', type: 'Water', category: 'special', power: 90, accuracy: 100, pp: 10 },
+  { id: 'pincercrush', name: 'Pincer Crush', type: 'Water', category: 'physical', power: 85, accuracy: 90, pp: 10 },
+  { id: 'discharge', name: 'Discharge', type: 'Electric', category: 'special', power: 80, accuracy: 100, pp: 15, status: { id: 'PAR', chance: 0.3 } },
+  { id: 'voltcharge', name: 'Volt Charge', type: 'Electric', category: 'physical', power: 90, accuracy: 100, pp: 15, recoil: 0.25 },
+  { id: 'energyball', name: 'Energy Ball', type: 'Grass', category: 'special', power: 80, accuracy: 100, pp: 10, statChange: { stat: 'spd', stages: -1, target: 'foe', chance: 0.1 } },
+  { id: 'seedbomb', name: 'Seed Bomb', type: 'Grass', category: 'physical', power: 80, accuracy: 100, pp: 15, contact: false },
+  { id: 'flamethrower', name: 'Flamethrower', type: 'Fire', category: 'special', power: 90, accuracy: 100, pp: 15, status: { id: 'BRN', chance: 0.1 } },
+  { id: 'airslash', name: 'Air Slash', type: 'Flying', category: 'special', power: 75, accuracy: 95, pp: 15, flinchChance: 0.3 },
+  { id: 'psybeam', name: 'Psybeam', type: 'Psychic', category: 'special', power: 65, accuracy: 100, pp: 20, confuseChance: 0.1 },
+  { id: 'psyburst', name: 'Psy Burst', type: 'Psychic', category: 'special', power: 90, accuracy: 100, pp: 10, statChange: { stat: 'spd', stages: -1, target: 'foe', chance: 0.1 } },
+  { id: 'ancientpower', name: 'Ancient Power', type: 'Rock', category: 'special', power: 60, accuracy: 100, pp: 10, statChange: { stat: 'atk', stages: 1, target: 'self', chance: 0.1 } },
+  { id: 'originwave', name: 'Origin Wave', type: 'Normal', category: 'special', power: 100, accuracy: 100, pp: 5, statChange: { stat: 'spa', stages: 1, target: 'self', chance: 0.2 } },
 ];
 
 export const MOVES: Record<string, MoveDef> = Object.fromEntries(list.map((m) => [m.id, m]));

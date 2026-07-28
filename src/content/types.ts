@@ -1,7 +1,41 @@
+export type Dir4 = 'up' | 'down' | 'left' | 'right';
+
 export interface Warp {
   x: number;
   y: number;
   to: string;
+  tx: number;
+  ty: number;
+}
+
+/** Solid until its flag is set; buttons and badges are what set those flags. */
+export interface Gate {
+  x: number;
+  y: number;
+  flag: string;
+  text?: string;
+}
+
+/** Pressing A toggles (or sets) the flag, which opens the gates that watch it. */
+export interface Button {
+  x: number;
+  y: number;
+  flag: string;
+  toggle?: boolean;
+  text?: string;
+}
+
+/** Can only be entered while moving in `dir` (gym 2 silk threads). */
+export interface OneWay {
+  x: number;
+  y: number;
+  dir: Dir4;
+}
+
+/** In-map teleport pad pair (gym 8). */
+export interface Pad {
+  x: number;
+  y: number;
   tx: number;
   ty: number;
 }
@@ -70,6 +104,16 @@ export interface GameMap {
   indoor: boolean;
   events?: MapEvent[];
   onEnter?: MapEvent; // x/y ignored; runs when the player warps in
+  gates?: Gate[];
+  buttons?: Button[];
+  oneWay?: OneWay[];
+  pads?: Pad[];
+  windDir?: Dir4; // direction '#' tiles push the player
+  lavaPeriod?: number; // frames per on/off cycle for 'x' tiles
 }
 
 export const SOLID_TILES = new Set(['T', 'W', 'B', 'R', 'D', 'w', 'C', 'S', 'o', 'P']);
+
+/** Shallow water: crossable only once the Tide Badge is in hand. */
+export const SHALLOW_TILE = '~';
+export const BADGE_FLAG_SHALLOW = 'badge_tide';

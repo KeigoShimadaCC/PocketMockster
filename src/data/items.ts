@@ -31,3 +31,19 @@ const list: ItemDef[] = [
 
 export const ITEMS: Record<string, ItemDef> = Object.fromEntries(list.map((i) => [i.id, i]));
 export const SHOP_STOCK = ['potion', 'superpotion', 'mockball', 'thunderstone', 'waterstone', 'moonstone', 'oranberry', 'sitrusberry'];
+
+// Marts restock as the badge count climbs; the base list stays first so prices stay predictable.
+const SHOP_UNLOCKS: { badges: number; items: string[] }[] = [
+  { badges: 2, items: ['swiftfeather'] },
+  { badges: 4, items: ['leftovers', 'embercharm', 'tidecharm', 'leafcharm'] },
+  { badges: 6, items: ['powerband', 'safetysash'] },
+  { badges: 8, items: ['luckycharm'] },
+];
+
+export function shopStock(badges: number): string[] {
+  const stock = [...SHOP_STOCK];
+  for (const tier of SHOP_UNLOCKS) {
+    if (badges >= tier.badges) stock.push(...tier.items);
+  }
+  return stock;
+}

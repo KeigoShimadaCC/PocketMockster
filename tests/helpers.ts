@@ -2,6 +2,8 @@ import type { Page } from '@playwright/test';
 
 export interface PMState {
   mode: string;
+  slot: number;
+  playFrames: number;
   map: string;
   x: number;
   y: number;
@@ -159,7 +161,7 @@ export async function walk(page: Page, dir: string, tiles: number): Promise<PMSt
 export async function settle(page: Page, maxIter = 200): Promise<void> {
   for (let i = 0; i < maxIter; i++) {
     const s = await state(page);
-    if (s.mode === 'overworld' || s.mode === 'ending' || s.mode === 'battle' || s.mode === 'title') return;
+    if (s.mode === 'overworld' || s.mode === 'ending' || s.mode === 'battle' || s.mode === 'title' || s.mode === 'credits') return;
     if (s.mode === 'dialogue') {
       await press(page, 'a');
     } else if (s.mode === 'menu') {

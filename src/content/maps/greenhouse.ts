@@ -1,0 +1,55 @@
+import type { GameMap } from '../types';
+
+export const greenhouse: GameMap = {
+  id: 'greenhouse',
+  name: 'Bloomrest Greenhouse',
+  indoor: true,
+  tiles: [
+    'wwwwwwwwwwwwwwww',
+    'wFFSFFFFFFFFSFFw',
+    'wFFFFFFFFFFFFFFw',
+    'wFFFFFFFFFFFFFFw',
+    'wFFFFFFFFFFFFFFw',
+    'wFFFFFFFFFFFFFFw',
+    'wFFFFFFFFFFFFFFw',
+    'wFFFFFFFFFFFFFFw',
+    'wFFFFFFFFFFFFFFw',
+    'wFFFFFFFFFFFFFFw',
+    'wFFFFFFFFFFFFFFw',
+    'wFFFFFFFFFFFFFFw',
+    'wwwwwwwMMwwwwwww',
+    'wwwwwwwwwwwwwwww',
+  ],
+  warps: [
+    { x: 7, y: 12, to: 'bloomrest', tx: 17, ty: 5 },
+    { x: 8, y: 12, to: 'bloomrest', tx: 17, ty: 5 },
+  ],
+  npcs: [
+    {
+      id: 'berry_farmer_npc',
+      x: 8,
+      y: 3,
+      spriteKey: 'villager1',
+      facing: 'down',
+      script: 'berry_farmer',
+      dialogue: [],
+    },
+    {
+      id: 'berry_trade_npc',
+      x: 5,
+      y: 6,
+      spriteKey: 'villager2',
+      facing: 'right',
+      script: 'berry_trade',
+      dialogue: [],
+    },
+  ],
+  items: [],
+  encounters: [],
+  encounterRate: 0,
+  signs: [
+    { x: 3, y: 1, text: 'BLOOMREST GREENHOUSE - Berries grow year-round here.' },
+    { x: 12, y: 1, text: 'BERRY EXCHANGE - Trade berries with the farmer.' },
+  ],
+  lockedDoors: [],
+};

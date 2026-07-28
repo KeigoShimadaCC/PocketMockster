@@ -59,7 +59,7 @@ describe('data integrity', () => {
     const ids = speciesList.map((s) => s.id);
     expect(new Set(ids).size).toBe(ids.length);
     expect(DEX_ORDER.length).toBe(speciesList.length);
-    expect(DEX_ORDER.length).toBe(26);
+    expect(DEX_ORDER.length).toBe(41);
   });
 
   it('has valid encounter and trainer species references on maps', () => {

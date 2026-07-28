@@ -5,7 +5,7 @@ export const verdantcity: GameMap = {
   name: 'Verdant City',
   indoor: false,
   tiles: [
-    'TTTTTTTTTTTTTTTTTTTTTT',
+    'TTTTTTTTT,,TTTTTTTTTTT',
     'T....................T',
     'T..RRRR...RRRR.......T',
     'T..RRRR...RRRR.......T',
@@ -30,6 +30,8 @@ export const verdantcity: GameMap = {
     { x: 11, y: 8, to: 'gym', tx: 6, ty: 11 },
     { x: 9, y: 17, to: 'route1', tx: 8, ty: 1 },
     { x: 10, y: 17, to: 'route1', tx: 9, ty: 1 },
+    { x: 9, y: 0, to: 'verdantwoods', tx: 8, ty: 22 },
+    { x: 10, y: 0, to: 'verdantwoods', tx: 9, ty: 22 },
   ],
   npcs: [
     {
@@ -50,6 +52,14 @@ export const verdantcity: GameMap = {
         "Leader Terra's Rock-types are super sturdy!",
         'Grass and Water moves will crack them right open.',
       ],
+    },
+    {
+      id: 'city_woods_hint',
+      x: 8,
+      y: 1,
+      spriteKey: 'villager1',
+      facing: 'right',
+      dialogue: ['The woods north of town are thick with bugs. Thornbury lies beyond.'],
     },
   ],
   items: [],

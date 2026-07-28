@@ -1,0 +1,56 @@
+import type { GameMap } from '../types';
+
+export const nullpeak_1f: GameMap = {
+  id: 'nullpeak_1f', name: 'Null Peak 1F', indoor: true,
+  tiles: [
+    'wwwwwwwwwDwwwwwwwwww',
+    'w__________________w',
+    'wwwwwwwww_wwwwwwwwww',
+    'w__________________w',
+    'w____w_______w_____w',
+    'w____w_______w_____w',
+    'w____w_______w_____w',
+    'w____w_______w_____w',
+    'w____w_______w_____w',
+    'w__________________w',
+    'wwwwwwwww_wwwwwwwwww',
+    'w__________________w',
+    'w____w_______w_____w',
+    'w____w_______w_____w',
+    'w____w_______w_____w',
+    'w____w_______w_____w',
+    'w____w_______w_____w',
+    'w____w_______w_____w',
+    'w____w_______w_____w',
+    'w__________________w',
+    'w__________________w',
+    'wwwwwwwwwDwwwwwwwwww',
+  ],
+  warps: [
+    { x: 9, y: 0, to: 'nullpeak_summit', tx: 9, ty: 16 },
+    { x: 9, y: 21, to: 'somnium', tx: 9, ty: 1 },
+  ],
+  npcs: [
+    { id: 'grunt_np1', x: 16, y: 17, spriteKey: 'villager2', facing: 'left', dialogue: ['Grunt: v9.1: Added security personnel to dig site.'], trainer: { id: 'grunt_np1', name: 'Rollback Grunt', spriteKey: 'villager2', party: [{ species: 'somnara', level: 47 }, { species: 'psywisp', level: 47 }], prize: 1128, introText: 'Grunt: Patch note: challenger detected. Engaging.', defeatText: 'Grunt: Bug report: challenger too strong. Filing issue.', sight: 3 } },
+    { id: 'grunt_np2', x: 3, y: 12, spriteKey: 'villager2', facing: 'right', dialogue: ['Grunt: v9.2: Reinforced lower corridors.'], trainer: { id: 'grunt_np2', name: 'Rollback Grunt', spriteKey: 'villager2', party: [{ species: 'howlette', level: 48 }, { species: 'mimew', level: 47 }], prize: 1152, introText: 'Grunt: Hotfix: blocking access to pillar A.', defeatText: 'Grunt: Patch reverted. You may proceed.', sight: 3 } },
+    { id: 'grunt_np3', x: 16, y: 8, spriteKey: 'villager2', facing: 'left', dialogue: ['Grunt: v9.3: Guarding pillar B corridor.'], trainer: { id: 'grunt_np3', name: 'Rollback Grunt', spriteKey: 'villager2', party: [{ species: 'enigmew', level: 48 }, { species: 'psywisp', level: 47 }], prize: 1152, introText: 'Grunt: Access denied. Initiating removal protocol.', defeatText: 'Grunt: Protocol failed. Escalating to Admin.', sight: 3 } },
+    { id: 'grunt_np4', x: 3, y: 4, spriteKey: 'villager2', facing: 'right', dialogue: ['Grunt: v9.4: Final guard before summit access.'], trainer: { id: 'grunt_np4', name: 'Rollback Grunt', spriteKey: 'villager2', party: [{ species: 'somnara', level: 49 }, { species: 'enigmew', level: 48 }], prize: 1176, introText: 'Grunt: Critical patch: summit stairs lockdown.', defeatText: 'Grunt: Lockdown bypassed. Director Nil has been notified.', sight: 3 } },
+  ],
+  items: [
+    { id: 'nullpeak_1f_superpotion', x: 17, y: 14, item: 'superpotion', count: 2 },
+    { id: 'nullpeak_1f_safetysash', x: 2, y: 7, item: 'safetysash', count: 1 },
+  ],
+  encounters: [],
+  encounterRate: 0,
+  signs: [],
+  lockedDoors: [],
+  events: [{ x: 9, y: 19, script: 'nullpeak_intro', once: 'nullpeakIntroSeen' }],
+  gates: [
+    { x: 9, y: 2, flag: 'np_pillar_b', text: 'A sealed gate. Pillar B must be activated.' },
+    { x: 9, y: 10, flag: 'np_pillar_a', text: 'A sealed gate. Pillar A must be activated.' },
+  ],
+  buttons: [
+    { x: 3, y: 15, flag: 'np_pillar_a', toggle: false, text: 'You pressed Pillar A. A gate groans open!' },
+    { x: 15, y: 5, flag: 'np_pillar_b', toggle: false, text: 'You pressed Pillar B. The last gate swings wide!' },
+  ],
+};

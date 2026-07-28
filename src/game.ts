@@ -1,11 +1,21 @@
 import { Battle, type BattleKind, type PlayerAction } from './battle';
 import { MOVES } from './data/moves';
 import { DEX_ORDER, SPECIES } from './data/species';
-import { ITEMS, SHOP_STOCK } from './data/items';
+import { ITEMS, shopStock } from './data/items';
 import { ABILITIES } from './data/abilities';
 import { TYPE_COLORS } from './data/types';
 import { consumePress, isHeld, type Key } from './input';
-import { MAPS, SOLID_TILES, type EncounterEntry, type GameMap, type MapEvent, type Npc } from './maps';
+import {
+  BADGE_FLAG_SHALLOW,
+  MAPS,
+  SHALLOW_TILE,
+  SOLID_TILES,
+  type EncounterEntry,
+  type GameMap,
+  type Gate,
+  type MapEvent,
+  type Npc,
+} from './maps';
 import { checkEvolution } from './evolution';
 import { breedError, canBreed, makeEgg, tickEgg } from './breeding';
 import { formatTime, phaseFor, tintFor } from './daynight';
@@ -27,6 +37,17 @@ import { SCRIPTS } from './content/scripts';
 import { trainerById } from './content/trainers';
 import { QuestLog, type QuestProgress } from './quests';
 import { QUESTS } from './content/quests';
+import { GYMS, GYM_BY_LEADER, type GymDef } from './content/gyms';
+import {
+  CreditsRoll,
+  IntroMovie,
+  SLOT_KEYS,
+  firstEmptySlot,
+  markIntroSeen,
+  newestSlot,
+  readSlots,
+} from './frontend';
+import { formatPlaytime, hpBar, paginate, panel, text, wrap } from './ui';
 
 const TILE = 32;
 const VIEW_W = 480;
@@ -37,8 +58,21 @@ export type Facing = 'up' | 'down' | 'left' | 'right';
 
 const SAVE_VERSION = 2;
 
+/** Beating these trainers opens the gate in front of whatever comes next. */
+const TRAINER_UNLOCK_FLAGS: Record<string, string[]> = {
+  elite_ryn: ['elite1Beaten'],
+  elite_calla: ['elite2Beaten'],
+  elite_volt: ['elite3Beaten'],
+  elite_noct: ['elite4Beaten', 'championOpen'],
+  director_nil: ['nilBeaten'],
+  admin_patch: ['patchBeaten'],
+  admin_merge: ['mergeBeaten'],
+};
+
 interface SaveData {
   version?: number;
+  savedAt?: number;
+  playFrames?: number;
   quests?: QuestProgress;
   mapId: string;
   px: number;
@@ -87,6 +121,7 @@ interface MenuState {
 }
 
 type Mode =
+  | 'intro'
   | 'title'
   | 'overworld'
   | 'dialogue'
@@ -94,7 +129,8 @@ type Mode =
   | 'battle'
   | 'summary'
   | 'dex'
-  | 'ending';
+  | 'ending'
+  | 'credits';
 
 type BattlePhase = 'msg' | 'action' | 'moves' | 'party' | 'bag';
 
@@ -151,11 +187,77 @@ export class Game implements ScriptHost {
   noEncounters = false;
   endingShown = false;
 
+  slot = 0;
+  playFrames = 0;
+  intro: IntroMovie | null = null;
+  credits: CreditsRoll | null = null;
+
   scripts = new ScriptRunner();
   quests = new QuestLog(QUESTS);
 
   constructor(ctx: CanvasRenderingContext2D) {
     this.ctx = ctx;
+  }
+
+  playIntro(): void {
+    this.intro = new IntroMovie();
+    this.mode = 'intro';
+  }
+
+  startCredits(): void {
+    const parade = [...this.caughtSpecies].filter((k) => MON_SPRITES[k]);
+    this.credits = new CreditsRoll(
+      {
+        badges: this.badges.length,
+        seen: this.seenSpecies.size,
+        caught: this.caughtSpecies.size,
+        dexTotal: DEX_ORDER.length,
+        playtime: formatPlaytime(this.playFrames),
+        party: this.party
+          .filter((m) => !m.isEgg)
+          .map((m) => ({ species: SPECIES[m.species]?.name ?? m.species, level: m.level })),
+      },
+      parade,
+      VIEW_H,
+    );
+    this.mode = 'credits';
+  }
+
+  titleOptions(): string[] {
+    const opts: string[] = ['NEW GAME'];
+    if (this.hasSave()) opts.push('CONTINUE');
+    opts.push('SLOTS', 'INTRO MOVIE');
+    return opts;
+  }
+
+  openSlotMenu(): void {
+    const slots = readSlots();
+    this.openMenu(
+      {
+        title: 'SAVE SLOTS',
+        items: slots.map(
+          (s) =>
+            `[${s.index + 1}] ${s.empty ? 'EMPTY' : `${s.lead}  ${s.badges}B  ${s.playtime}`}`,
+        ),
+        index: 0,
+        onSelect: (i) => {
+          const s = slots[i];
+          if (s.empty) {
+            this.slot = s.index;
+            this.closeAllMenus();
+            this.newGame();
+          } else {
+            this.closeAllMenus();
+            this.load(s.index);
+          }
+        },
+        onCancel: () => {
+          this.closeAllMenus();
+          this.mode = 'title';
+        },
+      },
+      true,
+    );
   }
 
   get map(): GameMap {
@@ -283,10 +385,11 @@ export class Game implements ScriptHost {
 
   setHealPoint(): void {
     this.healPoint = { map: this.mapId, x: this.px, y: this.py };
+    this.autosave();
   }
 
   openShop(stock?: string[], done?: () => void): void {
-    const list = stock ?? SHOP_STOCK;
+    const list = stock ?? shopStock(this.badges.length);
     this.openMenu({
       title: 'MOCK MART',
       items: list.map((id) => `${itemName(id)}  $${ITEMS[id].price}`),
@@ -331,9 +434,18 @@ export class Game implements ScriptHost {
         if (outcome === 'win') {
           this.defeatedTrainers.add(trainer.id);
           this.money += trainer.prize;
-          this.showDialogue([trainer.defeatText, `You got $${trainer.prize} for winning!`], () =>
-            done('win'),
-          );
+          this.onTrainerDefeated(trainer.id);
+          const after = [trainer.defeatText, `You got $${trainer.prize} for winning!`];
+          const gym = GYM_BY_LEADER[trainer.id];
+          if (gym) {
+            this.awardBadge(gym, after, () => done('win'));
+            return;
+          }
+          if (trainer.id === 'champion_kai') {
+            this.onChampionDefeated(after);
+            return;
+          }
+          this.showDialogue(after, () => done('win'));
           return;
         }
         if (outcome === 'lose') this.whiteOut();
@@ -384,11 +496,35 @@ export class Game implements ScriptHost {
     return rows[y][x];
   }
 
-  isBlocked(x: number, y: number): boolean {
-    if (SOLID_TILES.has(this.tileAt(x, y))) {
+  gateAt(x: number, y: number): Gate | undefined {
+    return this.map.gates?.find((g) => g.x === x && g.y === y);
+  }
+
+  gateOpen(gate: Gate): boolean {
+    return !!this.flags[gate.flag];
+  }
+
+  /** 'x' lava tiles are only crossable while retracted. */
+  lavaHot(): boolean {
+    const period = this.map.lavaPeriod ?? 0;
+    if (period <= 0) return false;
+    return this.frame % (period * 2) < period;
+  }
+
+  isBlocked(x: number, y: number, dir?: Facing): boolean {
+    const tile = this.tileAt(x, y);
+    if (SOLID_TILES.has(tile)) {
       // doors that are warps are walkable
       if (this.map.warps.some((w) => w.x === x && w.y === y)) return false;
       return true;
+    }
+    if (tile === SHALLOW_TILE && !this.flags[BADGE_FLAG_SHALLOW]) return true;
+    if (tile === 'x' && this.lavaHot()) return true;
+    const gate = this.gateAt(x, y);
+    if (gate && !this.gateOpen(gate)) return true;
+    if (dir) {
+      const one = this.map.oneWay?.find((o) => o.x === x && o.y === y);
+      if (one && one.dir !== dir) return true;
     }
     for (const npc of this.map.npcs) {
       if (this.npcVisible(npc) && npc.x === x && npc.y === y) return true;
@@ -400,15 +536,21 @@ export class Game implements ScriptHost {
 
   hasSave(): boolean {
     try {
-      return !!localStorage.getItem('pm_save');
+      return SLOT_KEYS.some((k) => !!localStorage.getItem(k));
     } catch {
       return false;
     }
   }
 
+  slotKey(): string {
+    return SLOT_KEYS[this.slot] ?? SLOT_KEYS[0];
+  }
+
   save(): void {
     const data = {
       version: SAVE_VERSION,
+      savedAt: Date.now(),
+      playFrames: this.playFrames,
       quests: this.quests.toJSON(),
       mapId: this.mapId,
       px: this.px,
@@ -429,11 +571,12 @@ export class Game implements ScriptHost {
       daycareSteps: this.daycareSteps,
       daycareEgg: this.daycareEgg,
     };
-    localStorage.setItem('pm_save', JSON.stringify(data));
+    localStorage.setItem(this.slotKey(), JSON.stringify(data));
   }
 
-  load(): boolean {
-    const raw = localStorage.getItem('pm_save');
+  load(slot = this.slot): boolean {
+    this.slot = slot;
+    const raw = localStorage.getItem(this.slotKey());
     if (!raw) return false;
     let d: SaveData;
     try {
@@ -461,6 +604,7 @@ export class Game implements ScriptHost {
     this.daycareSteps = d.daycareSteps ?? 0;
     this.daycareEgg = d.daycareEgg ?? null;
     this.quests = new QuestLog(QUESTS, d.quests ?? migrateQuests(this.flags, this.badges));
+    this.playFrames = d.playFrames ?? 0;
     this.mode = 'overworld';
     return true;
   }
@@ -521,15 +665,20 @@ export class Game implements ScriptHost {
 
     const dir = k as Facing;
     this.facing = dir;
+    this.stepTo(dir);
+  }
+
+  stepTo(dir: Facing): boolean {
     const [dx, dy] = deltas(dir);
     const nx = this.px + dx;
     const ny = this.py + dy;
-    if (this.isBlocked(nx, ny)) return;
+    if (this.isBlocked(nx, ny, dir)) return false;
     this.px = nx;
     this.py = ny;
     this.moveOffX = -dx * TILE;
     this.moveOffY = -dy * TILE;
     this.moving = true;
+    return true;
   }
 
   onStepComplete(): void {
@@ -546,6 +695,15 @@ export class Game implements ScriptHost {
       this.py = warp.ty;
       this.fireEvent(this.map.onEnter);
       return;
+    }
+    const pad = this.map.pads?.find((p) => p.x === this.px && p.y === this.py);
+    if (pad) {
+      this.px = pad.tx;
+      this.py = pad.ty;
+      return;
+    }
+    if (this.tileAt(this.px, this.py) === '#' && this.map.windDir) {
+      if (this.stepTo(this.map.windDir)) return;
     }
     if (this.fireEvent(this.map.events?.find((e) => e.x === this.px && e.y === this.py))) return;
     // ground items
@@ -640,6 +798,19 @@ export class Game implements ScriptHost {
         return;
       }
     }
+    const button = this.map.buttons?.find((b) => b.x === tx && b.y === ty);
+    if (button) {
+      this.flags[button.flag] = button.toggle === false ? true : !this.flags[button.flag];
+      this.showDialogue([
+        button.text ?? (this.flags[button.flag] ? 'The switch clicks. Something opened!' : 'The switch clicks back. Something closed.'),
+      ]);
+      return;
+    }
+    const closedGate = this.map.gates?.find((g) => g.x === tx && g.y === ty && !this.gateOpen(g));
+    if (closedGate) {
+      this.showDialogue([closedGate.text ?? 'A shutter blocks the way. There must be a switch somewhere.']);
+      return;
+    }
     const sign = this.map.signs.find((s) => s.x === tx && s.y === ty);
     if (sign) {
       this.showDialogue([sign.text]);
@@ -676,10 +847,11 @@ export class Game implements ScriptHost {
         this.openShop();
         return;
       case 'gymleader': {
+        const gym = GYMS.find((g) => g.mapId === this.mapId);
         this.showDialogue([
-          this.flags.gymDone
-            ? 'Terra: The Boulder Badge suits you. The world beyond this demo awaits, someday.'
-            : 'Terra: ...',
+          gym && this.flags[gym.badgeFlag]
+            ? `${gym.leaderName}: The ${gym.badge} suits you. ${gym.nextHint}`
+            : `${gym?.leaderName ?? 'Leader'}: ...`,
         ]);
         return;
       }
@@ -1019,16 +1191,16 @@ export class Game implements ScriptHost {
             this.defeatedTrainers.add(t.id);
             this.money += t.prize;
             const after = [`${t.defeatText}`, `You got $${t.prize} for winning!`];
-            if (t.id === 'leader_terra') {
-              this.flags.gymDone = true;
-              this.badges.push('Boulder Badge');
-              this.quests.advance('main_journey', 'badge2');
-              after.push('Terra: Take it. The BOULDER BADGE. Proof that your bond is harder than stone.');
-              this.showDialogue(after, () => {
-                this.mode = 'ending';
-              });
+            const gym = GYM_BY_LEADER[t.id];
+            if (gym) {
+              this.awardBadge(gym, after);
               return;
             }
+            if (t.id === 'champion_kai') {
+              this.onChampionDefeated(after);
+              return;
+            }
+            this.onTrainerDefeated(t.id);
             this.showDialogue(after);
           } else if (outcome === 'lose') {
             this.whiteOut();
@@ -1036,6 +1208,45 @@ export class Game implements ScriptHost {
         },
       );
     });
+  }
+
+  /** Elite Four rooms and story gates open by flag as soon as their trainer falls. */
+  onTrainerDefeated(id: string): void {
+    for (const flag of TRAINER_UNLOCK_FLAGS[id] ?? []) this.flags[flag] = true;
+  }
+
+  awardBadge(gym: GymDef, after: string[], done?: () => void): void {
+    if (!this.badges.includes(gym.badge)) this.badges.push(gym.badge);
+    this.flags[gym.badgeFlag] = true;
+    this.flags[`gym${gym.n}Done`] = true;
+    if (gym.n === 1) this.flags.gymDone = true; // legacy flag kept for old saves and tests
+    this.quests.advance('main_journey', gym.questStage);
+    if (this.badges.length >= GYMS.length) this.flags.leagueOpen = true;
+    after.push(
+      `${gym.leaderName}: Take the ${gym.badge.toUpperCase()}. You earned every letter of it.`,
+      gym.nextHint,
+    );
+    this.autosave();
+    this.showDialogue(after, done);
+  }
+
+  onChampionDefeated(after: string[]): void {
+    this.flags.championBeaten = true;
+    this.flags.postGame = true;
+    this.quests.advance('main_journey', 'champion');
+    this.quests.complete('main_journey');
+    this.autosave();
+    this.showDialogue(after, () => {
+      this.mode = 'ending';
+    });
+  }
+
+  autosave(): void {
+    try {
+      this.save();
+    } catch {
+      // storage may be unavailable; autosave is best-effort
+    }
   }
 
   rollEncounter(): EncounterEntry {
@@ -1587,17 +1798,51 @@ export class Game implements ScriptHost {
 
   update(): void {
     this.frame++;
+    const inGame = this.mode !== 'title' && this.mode !== 'intro' && this.mode !== 'credits';
+    if (inGame) this.playFrames++;
     // in-game clock: 1 game minute every 10 frames (full day ~4 real minutes)
-    if (this.mode !== 'title' && this.frame % 10 === 0) this.minute = (this.minute + 1) % 1440;
+    if (inGame && this.frame % 10 === 0) this.minute = (this.minute + 1) % 1440;
     switch (this.mode) {
+      case 'intro': {
+        const k = consumePress();
+        if (k === 'b' || k === 'start') this.intro?.skip();
+        this.intro?.update();
+        if (!this.intro || this.intro.done) {
+          markIntroSeen();
+          this.intro = null;
+          this.mode = 'title';
+        }
+        break;
+      }
       case 'title': {
         const k = consumePress();
         if (!k) break;
-        const options = this.hasSave() ? 2 : 1;
-        if (k === 'up' || k === 'down') this.titleIndex = (this.titleIndex + 1) % options;
+        const options = this.titleOptions();
+        if (k === 'up') this.titleIndex = (this.titleIndex - 1 + options.length) % options.length;
+        if (k === 'down') this.titleIndex = (this.titleIndex + 1) % options.length;
         if (k === 'a' || k === 'start') {
-          if (this.titleIndex === 0) this.newGame();
-          else if (!this.load()) this.newGame();
+          const choice = options[this.titleIndex];
+          if (choice === 'NEW GAME') {
+            this.slot = firstEmptySlot();
+            this.newGame();
+          } else if (choice === 'CONTINUE') {
+            if (!this.load(newestSlot())) this.newGame();
+          } else if (choice === 'SLOTS') {
+            this.openSlotMenu();
+          } else if (choice === 'INTRO MOVIE') {
+            this.playIntro();
+          }
+        }
+        break;
+      }
+      case 'credits': {
+        const k = consumePress();
+        if (k === 'b' || k === 'start') this.credits?.skip();
+        this.credits?.update();
+        if (!this.credits || this.credits.done) {
+          this.credits = null;
+          this.titleIndex = 0;
+          this.mode = 'title';
         }
         break;
       }
@@ -1649,10 +1894,7 @@ export class Game implements ScriptHost {
         const k = consumePress();
         if (k === 'a' || k === 'start') {
           this.endingShown = true;
-          this.mode = 'overworld';
-          this.showDialogue([
-            'Terra: Rest at the Mock Center, stock up, and keep training. Your journey has only just begun!',
-          ]);
+          this.startCredits();
         }
         break;
       }
@@ -1667,6 +1909,9 @@ export class Game implements ScriptHost {
     ctx.fillStyle = '#1a1c2c';
     ctx.fillRect(0, 0, VIEW_W, VIEW_H + BAR_H);
     switch (this.mode) {
+      case 'intro':
+        this.intro?.render(this.ctx, VIEW_W, VIEW_H);
+        break;
       case 'title':
         this.renderTitle();
         break;
@@ -1681,6 +1926,9 @@ export class Game implements ScriptHost {
         break;
       case 'ending':
         this.renderEnding();
+        break;
+      case 'credits':
+        this.credits?.render(this.ctx, VIEW_W, VIEW_H);
         break;
       default:
         this.renderOverworld();
@@ -1707,7 +1955,7 @@ export class Game implements ScriptHost {
     const ctx = this.ctx;
     ctx.fillStyle = '#29366f';
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
-    text(ctx, `MOCKDEX   Seen ${this.seenSpecies.size}/26   Caught ${this.caughtSpecies.size}/26`, 20, 24, '#ffd93b', 13);
+    text(ctx, `MOCKDEX   Seen ${this.seenSpecies.size}/${DEX_ORDER.length}   Caught ${this.caughtSpecies.size}/${DEX_ORDER.length}`, 20, 24, '#ffd93b', 13);
     const perPage = 11;
     const page = Math.floor(this.dexIndex / perPage);
     const start = page * perPage;
@@ -1739,6 +1987,7 @@ export class Game implements ScriptHost {
   renderControlsBar(): void {
     const ctx = this.ctx;
     const hints: Record<Mode, string> = {
+      intro: 'X/Esc: skip',
       title: '\u2191\u2193 select   Z/Enter confirm',
       overworld: '\u2190\u2191\u2193\u2192/WASD move   Z/Enter interact   M/Shift menu',
       dialogue: 'Z/Enter next',
@@ -1747,6 +1996,7 @@ export class Game implements ScriptHost {
       summary: 'Z/Enter or X/Esc back',
       dex: '\u2191\u2193 browse   X/Esc back',
       ending: 'Z/Enter continue',
+      credits: 'X/Esc: skip',
     };
     ctx.fillStyle = '#11131f';
     ctx.fillRect(0, VIEW_H, VIEW_W, BAR_H);
@@ -1762,16 +2012,23 @@ export class Game implements ScriptHost {
     g.addColorStop(1, '#3b5dc9');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
-    text(ctx, 'POCKET', 240, 70, '#ffd93b', 40, true);
-    text(ctx, 'MOCKSTER', 240, 115, '#ffffff', 40, true);
+    text(ctx, 'POCKET', 240, 60, '#ffd93b', 40, true);
+    text(ctx, 'MOCKSTER', 240, 100, '#ffffff', 40, true);
     const keys = Object.keys(MON_SPRITES);
     const idx = Math.floor(this.frame / 45) % keys.length;
-    drawSprite(ctx, MON_SPRITES[keys[idx]], 240 - 32, 130, 4);
-    const options = this.hasSave() ? ['NEW GAME', 'CONTINUE'] : ['NEW GAME'];
+    drawSprite(ctx, MON_SPRITES[keys[idx]], 240 - 32, 115, 4);
+    const options = this.titleOptions();
     options.forEach((o, i) => {
       const sel = i === this.titleIndex;
-      text(ctx, (sel ? '> ' : '  ') + o, 240, 240 + i * 26, sel ? '#ffd93b' : '#c0cbdc', 16, true);
+      text(ctx, (sel ? '> ' : '  ') + o, 240, 220 + i * 24, sel ? '#ffd93b' : '#c0cbdc', 15, true);
     });
+    if (this.hasSave()) {
+      const slots = readSlots();
+      const newest = slots.reduce((best, s) => (!s.empty && s.savedAt > best.savedAt ? s : best), slots[0]);
+      if (!newest.empty) {
+        text(ctx, `${newest.lead}  ${newest.badges}B  ${newest.playtime}`, 240, 300, '#8fa3c0', 11, true);
+      }
+    }
   }
 
   renderOverworld(): void {
@@ -1974,10 +2231,104 @@ export class Game implements ScriptHost {
         ctx.fill();
         break;
       }
+      case SHALLOW_TILE: {
+        const open = !!this.flags[BADGE_FLAG_SHALLOW];
+        ctx.fillStyle = open ? '#5aa9e6' : '#3a7ca5';
+        ctx.fillRect(x, y, TILE, TILE);
+        ctx.fillStyle = '#a8dadc';
+        const bob = Math.sin((this.frame + tx * 9 + ty * 5) / 22) * 3;
+        ctx.fillRect(x + 3, y + 12 + bob, 12, 3);
+        ctx.fillRect(x + 18, y + 20 - bob, 11, 3);
+        break;
+      }
+      case 'x': {
+        const hot = this.lavaHot();
+        ctx.fillStyle = hot ? '#e2543a' : '#5a3a34';
+        ctx.fillRect(x, y, TILE, TILE);
+        ctx.fillStyle = hot ? '#ffd93b' : '#7a4a3a';
+        ctx.fillRect(x + 4, y + 6, 24, 6);
+        ctx.fillRect(x + 8, y + 20, 16, 5);
+        break;
+      }
+      case '#': {
+        ctx.fillStyle = this.map.indoor ? '#cfd8e0' : '#a8c8d8';
+        ctx.fillRect(x, y, TILE, TILE);
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        const drift = (this.frame / 4 + tx * 6) % TILE;
+        ctx.beginPath();
+        ctx.moveTo(x + drift, y + 8);
+        ctx.lineTo(x + drift - 10, y + 8);
+        ctx.moveTo(x + drift, y + 22);
+        ctx.lineTo(x + drift - 14, y + 22);
+        ctx.stroke();
+        break;
+      }
+      case '_': {
+        ctx.fillStyle = '#3d3f52';
+        ctx.fillRect(x, y, TILE, TILE);
+        ctx.fillStyle = '#5a5f7a';
+        ctx.fillRect(x + 2, y + 2, 28, 28);
+        break;
+      }
       default: {
         ctx.fillStyle = '#1a1c2c';
         ctx.fillRect(x, y, TILE, TILE);
       }
+    }
+    this.renderTileOverlay(tx, ty, x, y);
+  }
+
+  renderTileOverlay(tx: number, ty: number, x: number, y: number): void {
+    const ctx = this.ctx;
+    const gate = this.gateAt(tx, ty);
+    if (gate && !this.gateOpen(gate)) {
+      ctx.fillStyle = '#8d99ae';
+      for (let i = 0; i < 4; i++) ctx.fillRect(x + 2 + i * 8, y, 4, TILE);
+      ctx.fillStyle = '#e63946';
+      ctx.fillRect(x + 12, y + 13, 8, 6);
+      return;
+    }
+    const button = this.map.buttons?.find((b) => b.x === tx && b.y === ty);
+    if (button) {
+      const on = !!this.flags[button.flag];
+      ctx.fillStyle = '#463f33';
+      ctx.fillRect(x + 6, y + 8, 20, 16);
+      ctx.fillStyle = on ? '#5ad25a' : '#e63946';
+      ctx.fillRect(x + 10, on ? y + 12 : y + 16, 12, 6);
+      return;
+    }
+    const pad = this.map.pads?.find((p) => p.x === tx && p.y === ty);
+    if (pad) {
+      const pulse = 6 + Math.sin(this.frame / 12) * 3;
+      ctx.fillStyle = '#7d3ac0';
+      ctx.beginPath();
+      ctx.arc(x + 16, y + 16, 12, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#d8a7ff';
+      ctx.beginPath();
+      ctx.arc(x + 16, y + 16, pulse, 0, Math.PI * 2);
+      ctx.fill();
+      return;
+    }
+    const one = this.map.oneWay?.find((o) => o.x === tx && o.y === ty);
+    if (one) {
+      ctx.fillStyle = '#f1faee';
+      const cx = x + 16;
+      const cy = y + 16;
+      const arrow: Record<string, [number, number][]> = {
+        up: [[cx, cy - 8], [cx - 7, cy + 6], [cx + 7, cy + 6]],
+        down: [[cx, cy + 8], [cx - 7, cy - 6], [cx + 7, cy - 6]],
+        left: [[cx - 8, cy], [cx + 6, cy - 7], [cx + 6, cy + 7]],
+        right: [[cx + 8, cy], [cx - 6, cy - 7], [cx - 6, cy + 7]],
+      };
+      const pts = arrow[one.dir];
+      ctx.beginPath();
+      ctx.moveTo(pts[0][0], pts[0][1]);
+      ctx.lineTo(pts[1][0], pts[1][1]);
+      ctx.lineTo(pts[2][0], pts[2][1]);
+      ctx.closePath();
+      ctx.fill();
     }
   }
 
@@ -2169,26 +2520,12 @@ export class Game implements ScriptHost {
     g.addColorStop(1, '#5d275d');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
-    // badge
-    ctx.fillStyle = '#b8a038';
-    ctx.beginPath();
-    ctx.moveTo(240, 50);
-    ctx.lineTo(275, 75);
-    ctx.lineTo(262, 115);
-    ctx.lineTo(218, 115);
-    ctx.lineTo(205, 75);
-    ctx.closePath();
-    ctx.fill();
-    ctx.fillStyle = '#d9c27e';
-    ctx.beginPath();
-    ctx.arc(240, 85, 15, 0, Math.PI * 2);
-    ctx.fill();
-    text(ctx, 'CONGRATULATIONS!', 240, 155, '#ffd93b', 24, true);
-    text(ctx, 'You earned the BOULDER BADGE', 240, 185, '#ffffff', 14, true);
-    text(ctx, 'and completed the Pocket Mockster demo!', 240, 205, '#ffffff', 14, true);
-    text(ctx, `MockDex: seen ${this.seenSpecies.size}/26, caught ${this.caughtSpecies.size}/26`, 240, 235, '#c0cbdc', 12, true);
-    text(ctx, 'The world keeps going. Catch them all!', 240, 260, '#c0cbdc', 12, true);
-    text(ctx, 'Press Z/Enter to keep playing', 240, 300, '#8fa3c0', 11, true);
+    text(ctx, 'CONGRATULATIONS!', 240, 80, '#ffd93b', 24, true);
+    text(ctx, 'You are the Champion of the Mocca region!', 240, 120, '#ffffff', 14, true);
+    text(ctx, `Badges: ${this.badges.length}/8`, 240, 155, '#c0cbdc', 12, true);
+    text(ctx, `MockDex: seen ${this.seenSpecies.size}/${DEX_ORDER.length}, caught ${this.caughtSpecies.size}/${DEX_ORDER.length}`, 240, 175, '#c0cbdc', 12, true);
+    text(ctx, `Playtime: ${formatPlaytime(this.playFrames)}`, 240, 195, '#c0cbdc', 12, true);
+    text(ctx, 'Press Z/Enter for credits', 240, 290, '#8fa3c0', 11, true);
   }
 }
 
@@ -2207,59 +2544,3 @@ function deltas(dir: Facing): [number, number] {
   }
 }
 
-function text(
-  ctx: CanvasRenderingContext2D,
-  s: string,
-  x: number,
-  y: number,
-  color: string,
-  size: number,
-  center = false,
-): void {
-  ctx.fillStyle = color;
-  ctx.font = `bold ${size}px "Courier New", monospace`;
-  ctx.textAlign = center ? 'center' : 'left';
-  ctx.fillText(s, x, y);
-  ctx.textAlign = 'left';
-}
-
-function panel(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number): void {
-  ctx.fillStyle = 'rgba(20,24,46,0.92)';
-  ctx.fillRect(x, y, w, h);
-  ctx.strokeStyle = '#8fa3c0';
-  ctx.lineWidth = 2;
-  ctx.strokeRect(x + 2, y + 2, w - 4, h - 4);
-}
-
-function hpBar(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, ratio: number): void {
-  const r = Math.max(0, Math.min(1, ratio));
-  ctx.fillStyle = '#29366f';
-  ctx.fillRect(x, y, w, 10);
-  ctx.fillStyle = r > 0.5 ? '#38b764' : r > 0.2 ? '#ffd93b' : '#e63946';
-  ctx.fillRect(x + 1, y + 1, (w - 2) * r, 8);
-}
-
-function wrap(s: string, width: number): string[] {
-  const words = s.split(' ');
-  const lines: string[] = [];
-  let cur = '';
-  for (const w of words) {
-    if ((cur + ' ' + w).trim().length > width) {
-      if (cur) lines.push(cur.trim());
-      cur = w;
-    } else {
-      cur = (cur + ' ' + w).trim();
-    }
-  }
-  if (cur) lines.push(cur.trim());
-  return lines;
-}
-
-function paginate(s: string): string[] {
-  const lines = wrap(s, 54);
-  const pages: string[] = [];
-  for (let i = 0; i < lines.length; i += 3) {
-    pages.push(lines.slice(i, i + 3).join(' '));
-  }
-  return pages.length ? pages : [''];
-}

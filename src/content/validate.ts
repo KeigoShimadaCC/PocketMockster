@@ -2,9 +2,13 @@ import { ITEMS } from '../data/items';
 import { SPECIES } from '../data/species';
 import { PEOPLE } from '../sprites';
 import { MAPS } from './maps';
-import { SOLID_TILES, type GameMap } from './types';
+import { SCRIPTS } from './scripts';
+import { SHALLOW_TILE, SOLID_TILES, type GameMap } from './types';
 
-export const KNOWN_TILES = new Set(['.', ',', 'G', 'T', 'W', 'R', 'B', 'D', 'S', 'w', 'F', 'C', 'M', 'P', 'o']);
+export const KNOWN_TILES = new Set([
+  '.', ',', 'G', 'T', 'W', 'R', 'B', 'D', 'S', 'w', 'F', 'C', 'M', 'P', 'o',
+  SHALLOW_TILE, 'x', '#', '_',
+]);
 const BASE_INVENTORY_ITEM_IDS = new Set(['mockball', 'potion', 'superpotion']);
 const KNOWN_ITEM_IDS = new Set([...Object.keys(ITEMS), ...BASE_INVENTORY_ITEM_IDS]);
 
@@ -300,6 +304,86 @@ export function validateMaps(maps: Record<string, GameMap> = MAPS): ContentIssue
           where: encounterWhere,
           message: `Encounter nightWeight ${encounter.nightWeight} must be > 0`,
         });
+      }
+    }
+
+    for (const [kind, list] of [
+      ['gate', map.gates ?? []],
+      ['button', map.buttons ?? []],
+      ['oneWay', map.oneWay ?? []],
+      ['pad', map.pads ?? []],
+    ] as const) {
+      for (const entry of list) {
+        const where = `map:${mapKey}:${kind}(${entry.x},${entry.y})`;
+        if (!inBounds(map, entry.x, entry.y)) {
+          issues.push({ severity: 'error', where, message: `${kind} position is out of bounds` });
+          continue;
+        }
+        const tile = tileAt(map, entry.x, entry.y);
+        if (SOLID_TILES.has(tile)) {
+          issues.push({
+            severity: 'error',
+            where,
+            message: `${kind} sits on solid tile '${tile}', so it can never be used`,
+          });
+        }
+        if (kind === 'pad' && 'tx' in entry && !inBounds(map, entry.tx, entry.ty)) {
+          issues.push({ severity: 'error', where, message: 'Pad destination is out of bounds' });
+        }
+      }
+    }
+
+    const gateFlags = new Set((map.gates ?? []).map((g) => g.flag));
+    for (const button of map.buttons ?? []) {
+      if (!gateFlags.has(button.flag) && !button.text) {
+        issues.push({
+          severity: 'warn',
+          where: `map:${mapKey}:button(${button.x},${button.y})`,
+          message: `Button flag '${button.flag}' opens no gate on this map`,
+        });
+      }
+    }
+
+    const hasWindTiles = map.tiles.some((row) => row.includes('#'));
+    if (hasWindTiles && !map.windDir) {
+      issues.push({
+        severity: 'error',
+        where: `map:${mapKey}`,
+        message: "Map has '#' wind tiles but no windDir",
+      });
+    }
+    if (map.windDir && !hasWindTiles) {
+      issues.push({
+        severity: 'warn',
+        where: `map:${mapKey}`,
+        message: "Map sets windDir but has no '#' tiles",
+      });
+    }
+    const hasLava = map.tiles.some((row) => row.includes('x'));
+    if (hasLava && !map.lavaPeriod) {
+      issues.push({
+        severity: 'error',
+        where: `map:${mapKey}`,
+        message: "Map has 'x' lava tiles but no lavaPeriod, so they stay passable forever",
+      });
+    }
+
+    for (const npc of map.npcs) {
+      if (npc.script && !SCRIPTS[npc.script]) {
+        issues.push({
+          severity: 'error',
+          where: `map:${mapKey}:npc:${npc.id}`,
+          message: `NPC references unknown script '${npc.script}'`,
+        });
+      }
+    }
+    for (const event of [...(map.events ?? []), ...(map.onEnter ? [map.onEnter] : [])]) {
+      const where = `map:${mapKey}:event(${event.x},${event.y})`;
+      if (!SCRIPTS[event.script]) {
+        issues.push({ severity: 'error', where, message: `Event references unknown script '${event.script}'` });
+      }
+      if (map.events?.includes(event) && !inBounds(map, event.x, event.y)) {
+        issues.push({ severity: 'error', where, message: 'Event position is out of bounds' });
       }
     }
 
