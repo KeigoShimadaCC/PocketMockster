@@ -99,6 +99,33 @@ test('health, speed parameter takes effect, new game flow', async () => {
   expect(w.state.x).toBe(6);
 });
 
+// A live agent batches tool calls, so concurrent requests must not interleave
+// keypresses (that produced bogus walked/blocked results before serialization).
+test('concurrent tool calls are serialized and report consistent positions', async () => {
+  const before = await api('/api/state');
+  const startX = before.raw.x;
+
+  const [left, s1, right, s2] = await Promise.all([
+    api('/api/walk', { dir: 'left', tiles: 1 }),
+    api('/api/state'),
+    api('/api/walk', { dir: 'right', tiles: 1 }),
+    api('/api/state'),
+  ]);
+
+  for (const w of [left, right]) {
+    expect(w.ok).toBe(true);
+    expect(w.blocked).toBeFalsy();
+    expect(w.walked).toBe(1);
+  }
+  expect(left.to.x).toBe(left.from.x - 1);
+  expect(right.to.x).toBe(right.from.x + 1);
+  for (const s of [s1, s2]) expect([startX - 1, startX]).toContain(s.raw.x);
+
+  const after = await api('/api/state');
+  expect(after.raw.x).toBe(startX);
+  expect(after.raw.moving).toBe(false);
+});
+
 test('map endpoint, battle loop, notes, finalize and artifacts', async () => {
   test.setTimeout(180_000);
 
@@ -127,6 +154,7 @@ test('map endpoint, battle loop, notes, finalize and artifacts', async () => {
   const battle = await api('/api/battle', { maxTurns: 30 });
   expect(battle.ok).toBe(true);
   expect(battle.messages.length).toBeGreaterThan(0);
+  expect(['win', 'lose', 'caught', 'run']).toContain(battle.outcome);
   expect(['overworld', 'battle']).toContain(battle.state.mode);
 
   const note = await api('/api/overlay-note', { note: 'e2e scripted observation: pipeline works' });

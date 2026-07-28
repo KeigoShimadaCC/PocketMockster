@@ -37,7 +37,7 @@ server.registerTool(
       'Start a fresh game: clears the save, skips intro dialogue, talks to the professor and picks a starter. Ends in the overworld of the lab with the starter in party. Call this first.',
     inputSchema: {
       seed: z.number().int().optional().describe('RNG seed for reproducibility'),
-      starterIndex: z.number().int().min(0).max(2).optional().describe('0 = first starter (cindercub), 1 = second, 2 = third'),
+      starterIndex: z.number().int().min(0).max(2).optional().describe('0 = sproutle (grass, default), 1 = cindercub (fire), 2 = puddlefin (water)'),
       noEncounters: z.boolean().optional().describe('disable random wild encounters (default true)'),
     },
   },
@@ -58,7 +58,7 @@ server.registerTool(
   'pm_walk',
   {
     description:
-      'Walk in a direction for N tiles. Stops early if blocked (returns blocked:true) or if a battle/dialogue interrupts (returns interrupted:<mode>). Prefer this over repeated pm_press for movement.',
+      'Walk in a direction for N tiles. Returns from/to positions and walked (tiles actually moved). Stops early if blocked (blocked:true, i.e. a wall/NPC) or if a battle/dialogue interrupts (interrupted:<mode>). The to position is authoritative: all tools are serialized server-side, so results never race with pm_state. Prefer this over repeated pm_press for movement.',
     inputSchema: { direction: DIR, tiles: z.number().int().min(1).max(60) },
   },
   async ({ direction, tiles }) => textResult(await call('/api/walk', { dir: direction, tiles })),
@@ -97,7 +97,7 @@ server.registerTool(
   'pm_battle',
   {
     description:
-      'Run the current battle to completion automatically (handles menus, forced switches, move-learning prompts). Returns all battle messages and the outcome. Only call when state.mode == "battle".',
+      'Run the current battle to completion automatically (handles menus, forced switches, move-learning prompts). Returns all battle messages plus outcome: "win" | "lose" | "caught" | "run". Only call when state.mode == "battle".',
     inputSchema: {
       preferMoves: z.array(z.string()).optional().describe('move ids to prefer, in priority order (e.g. ["vinewhip","tackle"])'),
       moveIndex: z.number().int().optional().describe('always use the move at this slot if it has PP'),

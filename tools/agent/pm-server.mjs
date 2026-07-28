@@ -125,6 +125,7 @@ let browser = null;
 let page = null;
 let speed = RUN_META.speed;
 let lastPosKey = null;
+let expectReload = false;
 let samePosStreak = 0;
 let stuckWarned = false;
 let prevSummary = null;
@@ -246,6 +247,19 @@ function trackStuck(s, actionDesc) {
   }
 }
 
+// Agents fire tool calls in parallel batches; without serialization two
+// requests interleave keypresses on the same page and report each other's
+// positions (observed as bogus walked/blocked values).
+let opChain = Promise.resolve();
+function withPageLock(fn) {
+  const result = opChain.then(fn, fn);
+  opChain = result.then(
+    () => {},
+    () => {},
+  );
+  return result;
+}
+
 // ---------- in-page drivers (ports of tests/helpers.ts, speed-aware) ----------
 const pressDelay = () => Math.max(15, Math.round(60 / speed));
 const loopDelay = () => Math.max(15, Math.round(50 / speed));
@@ -277,8 +291,26 @@ async function advanceDialogue(maxPages = 60) {
 }
 
 async function stepOnce(dir) {
+  const before = await page.evaluate(() => {
+    const s = window.__PM.state();
+    return { map: s.map, x: s.x, y: s.y, mode: s.mode };
+  });
   await page.evaluate((k) => window.__PM.press(k), dir);
   stats.keysPressed++;
+  // The press sits in a queue for a frame or two. Without waiting for it to be
+  // consumed, the idle check below passes instantly and a step that did move
+  // gets reported as blocked. A genuinely blocked step never changes anything,
+  // so the timeout is the "wall/NPC" signal.
+  await page
+    .waitForFunction(
+      (b) => {
+        const s = window.__PM.state();
+        return s.moving || s.mode !== b.mode || s.x !== b.x || s.y !== b.y || s.map !== b.map;
+      },
+      before,
+      { timeout: Math.max(120, Math.round(400 / speed)) },
+    )
+    .catch(() => {});
   await page.waitForFunction(
     () => {
       const s = window.__PM.state();
@@ -291,19 +323,22 @@ async function stepOnce(dir) {
   return getState();
 }
 
+const posOf = (s) => ({ map: s.map, x: s.x, y: s.y });
+
 async function walkTiles(dir, tiles) {
   let s = await getState();
+  const from = posOf(s);
   let walked = 0;
   for (let i = 0; i < tiles; i++) {
     const before = `${s.map}:${s.x},${s.y}`;
     s = await stepOnce(dir);
     stats.tilesWalked++;
-    if (s.mode !== 'overworld') return { state: s, walked, blocked: false, interrupted: s.mode };
     const after = `${s.map}:${s.x},${s.y}`;
-    if (before === after) return { state: s, walked, blocked: true };
-    walked++;
+    if (after !== before) walked++;
+    if (s.mode !== 'overworld') return { state: s, from, to: posOf(s), walked, blocked: false, interrupted: s.mode };
+    if (after === before) return { state: s, from, to: posOf(s), walked, blocked: true };
   }
-  return { state: s, walked, blocked: false };
+  return { state: s, from, to: posOf(s), walked, blocked: false };
 }
 
 async function settle(maxIter = 200) {
@@ -329,13 +364,17 @@ async function settle(maxIter = 200) {
 async function battleLoop(opts = {}) {
   const messages = [];
   const maxIter = (opts.maxTurns ?? 60) * 12;
+  // The battle object is gone by the time the loop exits, so the outcome
+  // ('win' | 'lose' | 'caught' | 'run') has to be captured while it is live.
+  let outcome = null;
   for (let i = 0; i < maxIter; i++) {
     const s = await getState();
     if (!s.battle || s.mode !== 'battle') {
       const after = opts.skipSettle ? s : await settle();
-      return { messages, outcome: s.battle?.outcome ?? null, state: stateSummary(after) };
+      return { messages, outcome, state: stateSummary(after) };
     }
     const b = s.battle;
+    if (b.outcome) outcome = b.outcome;
     if (b.phase === 'msg') {
       if (b.message && messages[messages.length - 1] !== b.message) messages.push(b.message);
       await pressKeys(['a']);
@@ -379,6 +418,7 @@ async function newGame(seed, starterIndex = 0, noEncounters = true) {
   const params = new URLSearchParams();
   if (seed !== null && seed !== undefined) params.set('seed', String(seed));
   if (noEncounters) params.set('noenc', '1');
+  expectReload = true;
   await page.goto(`http://localhost:${VITE_PORT}/?${params}`);
   await page.waitForFunction(() => !!window.__PM);
   await page.evaluate(() => window.__PM.debug.clearSave());
@@ -511,6 +551,9 @@ async function boot() {
 
   browser = await chromium.launch({ headless: HEADLESS });
   const context = await browser.newContext({ viewport: { width: 1200, height: 700 } });
+  // the page declares no favicon, and the browser's automatic request would
+  // otherwise show up in every run report as a 404 warning
+  await context.route('**/favicon.ico', (route) => route.fulfill({ status: 204, body: '' }));
   await context.addInitScript(OVERLAY_INIT);
   page = await context.newPage();
   page.on('pageerror', (err) => {
@@ -533,8 +576,22 @@ async function boot() {
 
   const params = new URLSearchParams();
   if (RUN_META.seed !== null) params.set('seed', String(RUN_META.seed));
+  expectReload = true;
   await page.goto(`http://localhost:${VITE_PORT}/?${params}`);
   await page.waitForFunction(() => !!window.__PM);
+  page.on('load', () => {
+    if (expectReload) {
+      expectReload = false;
+      return;
+    }
+    stats.warnings++;
+    prevSummary = null;
+    logEvent('warning', {
+      kind: 'page-reload',
+      message: 'page reloaded outside of new-game (vite HMR on a source edit, or a crash); all game progress was reset to the title screen',
+    });
+    pushFeed('!! page reloaded - progress reset');
+  });
   if (speed !== 1) await page.evaluate((n) => window.__PM.debug.setSpeed(n), speed);
   await getState();
   pushFeed(`run ${RUN_ID} started (speed ${speed}x${HEADLESS ? ', headless' : ''})`);
@@ -573,7 +630,11 @@ async function readBody(req) {
   return JSON.parse(data);
 }
 
-async function recordTool(tool, toolArgs, fn) {
+function recordTool(tool, toolArgs, fn) {
+  return withPageLock(() => runTool(tool, toolArgs, fn));
+}
+
+async function runTool(tool, toolArgs, fn) {
   const start = Date.now();
   logEvent('tool_call', { tool, args: toolArgs });
   stats.toolCalls[tool] = (stats.toolCalls[tool] ?? 0) + 1;
@@ -608,7 +669,7 @@ function describeTool(tool, a, result) {
     case 'press':
       return `press [${(a.keys ?? []).join(',')}]`;
     case 'walk':
-      return `walk ${a.dir} x${a.tiles}${result?.blocked ? ' (BLOCKED)' : ''}${result?.interrupted ? ` -> ${result.interrupted}` : ''}`;
+      return `walk ${a.dir} x${a.tiles} = ${result?.walked ?? 0} tiles -> (${result?.to?.x},${result?.to?.y})${result?.blocked ? ' BLOCKED' : ''}${result?.interrupted ? ` -> ${result.interrupted}` : ''}`;
     case 'battle':
       return `battle (${result?.messages?.length ?? 0} msgs)`;
     case 'new-game':
@@ -635,16 +696,19 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true, meta: RUN_META, stats, runDir: RUN_DIR });
     }
     if (route === 'GET /api/state') {
-      const s = await getState();
-      await updateOverlay();
+      const s = await withPageLock(async () => {
+        const st = await getState();
+        await updateOverlay();
+        return st;
+      });
       return json(res, 200, { ok: true, state: stateSummary(s), raw: s });
     }
     if (route === 'GET /api/map') {
-      const info = await page.evaluate(() => window.__PM.debug.mapInfo());
+      const info = await withPageLock(() => page.evaluate(() => window.__PM.debug.mapInfo()));
       return json(res, 200, { ok: true, map: info });
     }
     if (route === 'GET /api/screenshot') {
-      const buf = await page.screenshot();
+      const buf = await withPageLock(() => page.screenshot());
       res.writeHead(200, { 'content-type': 'image/png' });
       return res.end(buf);
     }
@@ -722,7 +786,7 @@ const server = http.createServer(async (req, res) => {
       case 'POST /api/finalize': {
         try {
           if (page && !page.isClosed()) {
-            await page.screenshot({ path: path.join(RUN_DIR, 'final.png') });
+            await withPageLock(() => page.screenshot({ path: path.join(RUN_DIR, 'final.png') }));
           }
         } catch {
           // ignore
