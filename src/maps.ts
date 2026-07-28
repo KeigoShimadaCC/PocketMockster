@@ -101,8 +101,8 @@ export const MAPS: Record<string, GameMap> = {
       'TTTTTTTTTTTTTTTTTTTT',
     ],
     warps: [
-      { x: 8, y: 0, to: 'route1', tx: 8, ty: 22 },
-      { x: 9, y: 0, to: 'route1', tx: 9, ty: 22 },
+      { x: 8, y: 0, to: 'route1', tx: 8, ty: 21 },
+      { x: 9, y: 0, to: 'route1', tx: 9, ty: 21 },
     ],
     npcs: [
       {

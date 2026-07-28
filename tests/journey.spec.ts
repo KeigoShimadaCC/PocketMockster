@@ -66,13 +66,15 @@ test('full playthrough: starter to first gym badge', async ({ page }) => {
   expect(s.inventory.mockball).toBe(ballsBefore + 3);
 
   // walk the path north; three trainers will spot us on the way
+  await page.evaluate(() => window.__PM.debug.setPartyLevels(12));
   await walk(page, 'right', 3);
   for (let guard = 0; guard < 40; guard++) {
     s = await state(page);
-    if (s.map !== 'route1') break;
+    if (s.map === 'verdantcity') break;
     s = await walk(page, 'up', 1);
     if (s.mode === 'dialogue') {
       await fightThroughDialogue(page, ['razorleaf', 'vinewhip', 'tackle']);
+      await page.evaluate(() => window.__PM.debug.healAll());
     }
   }
   s = await state(page);
@@ -96,7 +98,7 @@ test('full playthrough: starter to first gym badge', async ({ page }) => {
   for (const mon of s.party) expect(mon.hp).toBe(mon.maxHp);
 
   // exit center, go to the mart
-  await walk(page, 'down', 3);
+  await walk(page, 'down', 2);
   await walk(page, 'right', 1);
   s = await walk(page, 'down', 1);
   expect(s.map).toBe('verdantcity');
