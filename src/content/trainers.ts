@@ -9,7 +9,22 @@ for (const map of Object.values(MAPS)) {
 }
 
 // trainers that only ever appear through scripts (ambushes, villain beats)
-export const SCRIPT_TRAINERS: Record<string, NpcTrainer> = {};
+export const SCRIPT_TRAINERS: Record<string, NpcTrainer> = {
+  grunt_woods_1: {
+    id: 'grunt_woods_1',
+    name: 'Rollback Grunt',
+    spriteKey: 'villager2',
+    party: [
+      { species: 'buzzler', level: 14 },
+      { species: 'thistling', level: 15 },
+    ],
+    prize: 600,
+    introText: 'Grunt: v2.1: Added roadblock to Verdant Woods. Expect resistance!',
+    defeatText: 'Grunt: Patch note: challenger defeated roadblock. Filing retreat.',
+    sight: 0,
+    ai: 'basic',
+  },
+};
 
 export const TRAINERS: Record<string, NpcTrainer> = { ...fromMaps, ...SCRIPT_TRAINERS };
 

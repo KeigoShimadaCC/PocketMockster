@@ -144,8 +144,8 @@ export const SCRIPTS: Record<string, ScriptCmd[]> = {
       flag: 'powerplantBossBeaten',
       then: [{ t: 'say', lines: ['The generators are quiet now. Team Rollback has retreated.'] }],
       else: [
-        { t: 'say', lines: ['ADMIN SPARK: So you tracked us down. Impressive.', 'But this power belongs to Team Rollback now!'] },
-        { t: 'battle', trainer: 'admin_spark', onWin: [{ t: 'setFlag', flag: 'powerplantBossBeaten' }, { t: 'say', lines: ['ADMIN SPARK: Impossible! Our plan...', 'No matter. The Director has what he needs elsewhere. Withdraw!'] }] },
+        { t: 'say', lines: ['ADMIN PATCH: So you tracked us down. Impressive.', 'But this power belongs to Team Rollback now!'] },
+        { t: 'battle', trainer: 'admin_patch', onWin: [{ t: 'setFlag', flag: 'powerplantBossBeaten' }, { t: 'say', lines: ['ADMIN PATCH: Impossible! Our plan...', 'No matter. The Director has what he needs elsewhere. Withdraw!'] }] },
       ],
     },
   ],
