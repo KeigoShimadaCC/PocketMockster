@@ -15,6 +15,8 @@ export interface NpcTrainer {
   introText: string;
   defeatText: string;
   sight: number; // tiles of line-of-sight, 0 = talk only
+  ai?: 'basic' | 'smart' | 'leader';
+  potions?: number; // super potions usable in battle
 }
 
 export interface Npc {
@@ -24,7 +26,7 @@ export interface Npc {
   spriteKey: string;
   facing: 'up' | 'down' | 'left' | 'right';
   dialogue: string[];
-  action?: 'heal' | 'shop' | 'giveballs' | 'starter' | 'gymleader';
+  action?: 'heal' | 'shop' | 'giveballs' | 'starter' | 'gymleader' | 'daycare' | 'trade';
   trainer?: NpcTrainer;
   hiddenUntilFlag?: string;
   hiddenAfterFlag?: string;
@@ -34,7 +36,7 @@ export interface GroundItem {
   id: string;
   x: number;
   y: number;
-  item: 'potion' | 'superpotion' | 'mockball';
+  item: string;
   count: number;
 }
 
@@ -43,6 +45,7 @@ export interface EncounterEntry {
   minLv: number;
   maxLv: number;
   weight: number;
+  nightWeight?: number; // overrides weight during night phase
 }
 
 export interface GameMap {
@@ -73,8 +76,10 @@ const route1Encounters: EncounterEntry[] = [
   { species: 'cocoonet', minLv: 3, maxLv: 5, weight: 3 },
   { species: 'pebblit', minLv: 3, maxLv: 5, weight: 2 },
   { species: 'floazy', minLv: 3, maxLv: 5, weight: 1 },
-  { species: 'psywisp', minLv: 3, maxLv: 5, weight: 0.7 },
+  { species: 'psywisp', minLv: 3, maxLv: 5, weight: 0.7, nightWeight: 3 },
   { species: 'zapwing', minLv: 4, maxLv: 5, weight: 0.3 },
+  { species: 'somnara', minLv: 4, maxLv: 6, weight: 0.1, nightWeight: 3.5 },
+  { species: 'mimew', minLv: 4, maxLv: 6, weight: 0.1, nightWeight: 0.4 },
 ];
 
 export const MAPS: Record<string, GameMap> = {
@@ -112,8 +117,26 @@ export const MAPS: Record<string, GameMap> = {
         spriteKey: 'villager1',
         facing: 'down',
         dialogue: [
-          'Technology is amazing! They say the MockDex can hold data on 20 whole Mockemon!',
+          'Technology is amazing! They say the MockDex can hold data on 26 whole Mockemon!',
         ],
+      },
+      {
+        id: 'daycare_lady',
+        x: 16,
+        y: 7,
+        spriteKey: 'villager1',
+        facing: 'left',
+        action: 'daycare',
+        dialogue: [],
+      },
+      {
+        id: 'trade_hiker',
+        x: 3,
+        y: 12,
+        spriteKey: 'hiker',
+        facing: 'right',
+        action: 'trade',
+        dialogue: [],
       },
       {
         id: 'ball_giver',
@@ -288,6 +311,10 @@ export const MAPS: Record<string, GameMap> = {
       { id: 'r1_potion1', x: 14, y: 7, item: 'potion', count: 1 },
       { id: 'r1_potion2', x: 16, y: 12, item: 'potion', count: 1 },
       { id: 'r1_ball1', x: 5, y: 19, item: 'mockball', count: 3 },
+      { id: 'r1_moonstone', x: 17, y: 18, item: 'moonstone', count: 1 },
+      { id: 'r1_thunderstone', x: 2, y: 6, item: 'thunderstone', count: 1 },
+      { id: 'r1_waterstone', x: 17, y: 2, item: 'waterstone', count: 1 },
+      { id: 'r1_oran', x: 2, y: 13, item: 'oranberry', count: 2 },
     ],
     encounters: route1Encounters,
     encounterRate: 0.14,
@@ -464,12 +491,13 @@ export const MAPS: Record<string, GameMap> = {
           spriteKey: 'hiker',
           party: [
             { species: 'pebblit', level: 7 },
-            { species: 'mudlet', level: 7 },
+            { species: 'pebblit', level: 8 },
           ],
           prize: 320,
           introText: 'Rocco: Before Terra, you must break through ME!',
           defeatText: 'Rocco: Crushed... like gravel...',
           sight: 3,
+          ai: 'smart',
         },
       },
       {
@@ -493,6 +521,8 @@ export const MAPS: Record<string, GameMap> = {
             'Terra: I am Terra, the Unshakable Stone. My will, like my Mockemon, does not crack. Show me yours!',
           defeatText: 'Terra: ...The stone cracks. Magnificent.',
           sight: 0,
+          ai: 'leader',
+          potions: 1,
         },
       },
     ],

@@ -92,7 +92,7 @@ const list: SpeciesDef[] = [
     abilities: ['riptide'], evYield: { def: 1 },
     learnset: [
       { lv: 1, move: 'tackle' }, { lv: 3, move: 'tailwhip' }, { lv: 6, move: 'watergun' },
-      { lv: 9, move: 'harden' }, { lv: 12, move: 'bubblebeam' },
+      { lv: 9, move: 'harden' }, { lv: 10, move: 'bite' }, { lv: 12, move: 'bubblebeam' },
     ],
     evolution: { to: 'torrentle', method: 'level', level: 15 },
     dex: 'It carries a puddle in its shell everywhere. Splashes shyly when startled.',

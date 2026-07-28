@@ -2,6 +2,8 @@ import { Game } from './game';
 import { clearInput, initInput, virtualPress, type Key } from './input';
 import { createMockemon, gainExp, expForLevel, growthOf, healFull, movesAtLevel } from './mockemon';
 import { MOVES } from './data/moves';
+import { phaseFor } from './daynight';
+import { canBreed, makeEgg, tickEgg } from './breeding';
 import { setSeed } from './rng';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
@@ -63,8 +65,19 @@ window.__PM = {
         maxHp: m.maxHp,
         moves: m.moves.map((ms) => ms.id),
         status: m.status,
+        isEgg: !!m.isEgg,
+        hatchSteps: m.hatchSteps ?? 0,
+        heldItem: m.heldItem,
+        pendingMoves: [...m.pendingMoves],
+        friendship: m.friendship,
+        ability: m.ability,
       })),
       storageCount: game.storage.length,
+      storage: game.storage.map((m) => ({ species: m.species, level: m.level, isEgg: !!m.isEgg })),
+      minute: game.minute,
+      phase: phaseFor(game.minute),
+      daycare: game.daycare.map((m) => (m ? { species: m.species, level: m.level } : null)),
+      daycareEgg: !!game.daycareEgg,
       dialogue: game.dialogueQueue[0] ?? null,
       menu: game.menu ? { title: game.menu.title, items: game.menu.items, index: game.menu.index } : null,
       battle: game.battle
@@ -82,7 +95,7 @@ window.__PM = {
             active: {
               species: game.battle.active.species,
               hp: game.battle.active.hp,
-              moves: game.battle.active.moves.map((ms) => ms.id),
+              moves: game.battle.active.moves.map((ms) => ({ id: ms.id, pp: ms.pp })),
             },
           }
         : null,
@@ -119,8 +132,42 @@ window.__PM = {
     givemon(species: string, level: number) {
       if (game.party.length < 6) game.party.push(createMockemon(species, level));
     },
-    addItem(item: 'potion' | 'superpotion' | 'mockball', n: number) {
-      game.inventory[item] += n;
+    addItem(item: string, n: number) {
+      game.inventory[item] = (game.inventory[item] ?? 0) + n;
+    },
+    setTime(minute: number) {
+      game.minute = ((minute % 1440) + 1440) % 1440;
+    },
+    hatchEggs() {
+      for (const m of game.party) if (m.isEgg) tickEgg(m, 99999);
+    },
+    setHeldItem(partyIndex: number, item: string | null) {
+      const m = game.party[partyIndex];
+      if (m) m.heldItem = item;
+    },
+    depositDaycare(a: number, b: number) {
+      const m1 = game.party[a];
+      const m2 = game.party[b];
+      if (!m1 || !m2) return;
+      game.daycare = [m1, m2];
+      game.party = game.party.filter((_, i) => i !== a && i !== b);
+    },
+    walk(steps: number) {
+      // simulate steps: egg ticking + daycare breeding progress
+      for (let s = 0; s < steps; s++) {
+        for (const m of game.party) if (m.isEgg) tickEgg(m, 1);
+        if (game.daycare[0] && game.daycare[1] && !game.daycareEgg && canBreed(game.daycare[0], game.daycare[1])) {
+          game.daycareSteps++;
+          if (game.daycareSteps >= 256) {
+            game.daycareSteps = 0;
+            game.daycareEgg = makeEgg(game.daycare[0], game.daycare[1]);
+          }
+        }
+      }
+    },
+    drainPP(partyIndex: number) {
+      const m = game.party[partyIndex];
+      if (m) for (const ms of m.moves) ms.pp = 0;
     },
     healAll() {
       for (const m of game.party) healFull(m);

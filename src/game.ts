@@ -1,10 +1,25 @@
 import { Battle, type BattleKind, type PlayerAction } from './battle';
 import { MOVES } from './data/moves';
-import { SPECIES } from './data/species';
+import { DEX_ORDER, SPECIES } from './data/species';
+import { ITEMS, SHOP_STOCK } from './data/items';
+import { ABILITIES } from './data/abilities';
 import { TYPE_COLORS } from './data/types';
 import { consumePress, isHeld, type Key } from './input';
 import { MAPS, SOLID_TILES, type GameMap, type Npc } from './maps';
-import { createMockemon, def, healFull, expForLevel, growthOf, type Mockemon } from './mockemon';
+import { checkEvolution } from './evolution';
+import { breedError, canBreed, makeEgg, tickEgg } from './breeding';
+import { formatTime, phaseFor, tintFor } from './daynight';
+import {
+  createMockemon,
+  def,
+  displayName,
+  evolve,
+  healFull,
+  expForLevel,
+  growthOf,
+  learnMove,
+  type Mockemon,
+} from './mockemon';
 import { chance, rand, randInt } from './rng';
 import { drawSprite, MON_SPRITES, PEOPLE } from './sprites';
 
@@ -15,15 +30,9 @@ const BAR_H = 32;
 
 export type Facing = 'up' | 'down' | 'left' | 'right';
 
-type ItemId = 'potion' | 'superpotion' | 'mockball';
-
-const ITEM_NAMES: Record<ItemId, string> = {
-  potion: 'Potion',
-  superpotion: 'Super Potion',
-  mockball: 'MockBall',
-};
-
-const SHOP_PRICES: Record<ItemId, number> = { potion: 300, superpotion: 700, mockball: 200 };
+function itemName(id: string): string {
+  return ITEMS[id]?.name ?? id;
+}
 
 interface MenuState {
   title: string;
@@ -41,6 +50,7 @@ type Mode =
   | 'menu'
   | 'battle'
   | 'summary'
+  | 'dex'
   | 'ending';
 
 type BattlePhase = 'msg' | 'action' | 'moves' | 'party' | 'bag';
@@ -61,7 +71,7 @@ export class Game {
 
   party: Mockemon[] = [];
   storage: Mockemon[] = [];
-  inventory: Record<ItemId, number> = { potion: 0, superpotion: 0, mockball: 0 };
+  inventory: Record<string, number> = { potion: 0, superpotion: 0, mockball: 0 };
   money = 3000;
   badges: string[] = [];
   flags: Record<string, boolean> = {};
@@ -70,6 +80,11 @@ export class Game {
   healPoint = { map: 'mapletown', x: 7, y: 9 };
   seenSpecies = new Set<string>();
   caughtSpecies = new Set<string>();
+  minute = 600; // in-game clock (0..1439), starts 10:00
+  daycare: (Mockemon | null)[] = [null, null];
+  daycareSteps = 0;
+  daycareEgg: Mockemon | null = null;
+  dexIndex = 0;
 
   dialogueQueue: string[] = [];
   dialogueDone: (() => void) | null = null;
@@ -86,7 +101,9 @@ export class Game {
   battleSpriteKey = '';
 
   summaryMon: Mockemon | null = null;
-  pendingHealItem: ItemId | null = null;
+  pendingHealItem: string | null = null;
+  pendingGiveItem: string | null = null;
+  pendingStone: string | null = null;
 
   noEncounters = false;
   endingShown = false;
@@ -176,6 +193,10 @@ export class Game {
       healPoint: this.healPoint,
       seen: [...this.seenSpecies],
       caught: [...this.caughtSpecies],
+      minute: this.minute,
+      daycare: this.daycare,
+      daycareSteps: this.daycareSteps,
+      daycareEgg: this.daycareEgg,
     };
     localStorage.setItem('pm_save', JSON.stringify(data));
   }
@@ -198,6 +219,10 @@ export class Game {
     this.healPoint = d.healPoint;
     this.seenSpecies = new Set(d.seen ?? []);
     this.caughtSpecies = new Set(d.caught ?? []);
+    this.minute = d.minute ?? 600;
+    this.daycare = d.daycare ?? [null, null];
+    this.daycareSteps = d.daycareSteps ?? 0;
+    this.daycareEgg = d.daycareEgg ?? null;
     this.mode = 'overworld';
     return true;
   }
@@ -284,11 +309,28 @@ export class Game {
     );
     if (item) {
       this.collectedItems.add(item.id);
-      this.inventory[item.item] += item.count;
+      this.inventory[item.item] = (this.inventory[item.item] ?? 0) + item.count;
       this.showDialogue([
-        `You found ${item.count > 1 ? item.count + 'x ' : ''}${ITEM_NAMES[item.item]}!`,
+        `You found ${item.count > 1 ? item.count + 'x ' : ''}${itemName(item.item)}!`,
       ]);
       return;
+    }
+    // party eggs tick down as you walk
+    for (const m of this.party) {
+      if (m.isEgg && tickEgg(m, 1)) {
+        this.seenSpecies.add(m.species);
+        this.caughtSpecies.add(m.species);
+        this.showDialogue(['Oh?', `The Egg hatched into ${SPECIES[m.species].name}!`]);
+        return;
+      }
+    }
+    // daycare breeding progress
+    if (this.daycare[0] && this.daycare[1] && !this.daycareEgg && canBreed(this.daycare[0], this.daycare[1])) {
+      this.daycareSteps++;
+      if (this.daycareSteps >= 256) {
+        this.daycareSteps = 0;
+        this.daycareEgg = makeEgg(this.daycare[0], this.daycare[1]);
+      }
     }
     // rival ambush in lab
     if (
@@ -419,9 +461,204 @@ export class Game {
         ]);
         return;
       }
+      case 'daycare':
+        this.daycareDialogue();
+        return;
+      case 'trade':
+        this.tradeDialogue();
+        return;
       default:
         if (npc.dialogue.length > 0) this.showDialogue(npc.dialogue);
     }
+  }
+
+  daycareDialogue(): void {
+    const [a, b] = this.daycare;
+    const lines: string[] = ['DAYCARE LADY: Welcome to the Mockemon Daycare! I raise your Mockemon while you adventure.'];
+    if (a && b) {
+      const err = breedError(a, b);
+      lines.push(
+        err
+          ? `Your ${displayName(a)} and ${displayName(b)}... ${err}`
+          : `Your ${displayName(a)} and ${displayName(b)} are getting along wonderfully!`,
+      );
+      if (this.daycareEgg) lines.push('Oh! I found an EGG! Will you take it?');
+      else lines.push('Who knows, an Egg might appear if you keep walking around!');
+    } else if (a || b) {
+      lines.push(`Your ${displayName((a ?? b)!)} is doing fine. Leave one more and maybe an Egg will appear!`);
+    } else {
+      lines.push('Leave two compatible Mockemon with me, and you might find an Egg later!');
+    }
+    this.showDialogue(lines, () => this.openDaycareMenu());
+  }
+
+  openDaycareMenu(): void {
+    const options: string[] = [];
+    if (this.daycareEgg) options.push('TAKE EGG');
+    if (this.daycare.some((m) => m === null)) options.push('DEPOSIT');
+    if (this.daycare.some((m) => m !== null)) options.push('TAKE BACK');
+    options.push('BYE');
+    this.openMenu({
+      title: 'DAYCARE',
+      items: options,
+      index: 0,
+      info: this.daycare.map((m, i) => `Slot ${i + 1}: ${m ? `${displayName(m)} Lv${m.level}` : '(empty)'}`),
+      onSelect: (i) => {
+        const sel = options[i];
+        if (sel === 'TAKE EGG') {
+          const egg = this.daycareEgg!;
+          this.daycareEgg = null;
+          this.closeAllMenus();
+          if (this.party.length < 6) {
+            this.party.push(egg);
+            this.showDialogue(['You received the Egg! It will hatch as you walk with it.']);
+          } else {
+            this.storage.push(egg);
+            this.showDialogue(['Your party is full! The Egg was sent to storage.']);
+          }
+        } else if (sel === 'DEPOSIT') {
+          this.openDaycareDeposit();
+        } else if (sel === 'TAKE BACK') {
+          this.openDaycareTakeBack();
+        } else {
+          this.closeAllMenus();
+        }
+      },
+      onCancel: () => this.closeAllMenus(),
+    });
+  }
+
+  openDaycareDeposit(): void {
+    const candidates = this.party.map((m, i) => ({ m, i }));
+    if (this.party.length <= 1) {
+      this.closeAllMenus();
+      this.showDialogue(['DAYCARE LADY: You cannot leave your only Mockemon with me!']);
+      return;
+    }
+    this.openMenu(
+      {
+        title: 'Deposit which?',
+        items: candidates.map(({ m }) => `${m.isEgg ? 'EGG' : displayName(m)} Lv${m.level}`),
+        index: 0,
+        onSelect: (i) => {
+          if (this.party.length <= 1) return;
+          const mon = this.party[i];
+          this.party.splice(i, 1);
+          const slot = this.daycare[0] === null ? 0 : 1;
+          this.daycare[slot] = mon;
+          this.daycareSteps = 0;
+          this.closeAllMenus();
+          this.showDialogue([`DAYCARE LADY: I will take good care of ${displayName(mon)}!`]);
+        },
+        onCancel: () => this.openDaycareMenu(),
+      },
+      true,
+    );
+  }
+
+  openDaycareTakeBack(): void {
+    const deposited = this.daycare
+      .map((m, i) => ({ m, i }))
+      .filter((x): x is { m: Mockemon; i: number } => x.m !== null);
+    this.openMenu(
+      {
+        title: 'Take back which?',
+        items: deposited.map(({ m }) => `${m.isEgg ? 'EGG' : displayName(m)} Lv${m.level}`),
+        index: 0,
+        onSelect: (i) => {
+          if (this.party.length >= 6) {
+            this.closeAllMenus();
+            this.showDialogue(['Your party is full! Make room first.']);
+            return;
+          }
+          const { m, i: slot } = deposited[i];
+          this.daycare[slot] = null;
+          this.daycareSteps = 0;
+          this.party.push(m);
+          this.closeAllMenus();
+          this.showDialogue([`Welcome back, ${displayName(m)}!`]);
+        },
+        onCancel: () => this.openDaycareMenu(),
+      },
+      true,
+    );
+  }
+
+  tradeDialogue(): void {
+    if (this.flags.hikerTraded) {
+      this.showDialogue(['HIKER: How is my old Pebblit doing? It was a fine trade, was it not?']);
+      return;
+    }
+    this.showDialogue(
+      [
+        'HIKER: I found this Pebblit in the mountains, but it misses adventure!',
+        'HIKER: I will trade my Pebblit (Lv15) for any one of your Mockemon. What do you say?',
+      ],
+      () => {
+        this.openMenu({
+          title: 'Trade with the hiker?',
+          items: ['TRADE', 'NO THANKS'],
+          index: 0,
+          onSelect: (i) => {
+            if (i !== 0) {
+              this.closeAllMenus();
+              this.showDialogue(['HIKER: Maybe next time!']);
+              return;
+            }
+            this.openTradeSelect();
+          },
+          onCancel: () => this.closeAllMenus(),
+        });
+      },
+    );
+  }
+
+  openTradeSelect(): void {
+    if (this.party.length <= 1) {
+      this.closeAllMenus();
+      this.showDialogue(['HIKER: You only have one Mockemon! I could never take it.']);
+      return;
+    }
+    this.openMenu(
+      {
+        title: 'Give which Mockemon?',
+        items: this.party.map((m) => `${m.isEgg ? 'EGG' : displayName(m)} Lv${m.level}`),
+        index: 0,
+        onSelect: (i) => {
+          if (this.party.length <= 1) return;
+          const given = this.party[i];
+          if (given.isEgg) {
+            this.showDialogue(['HIKER: An Egg? I would not know what to do with it!'], () => this.openTradeSelect());
+            return;
+          }
+          this.party.splice(i, 1);
+          const received = createMockemon('pebblit', 15);
+          this.party.push(received);
+          this.flags.hikerTraded = true;
+          this.seenSpecies.add('pebblit');
+          this.caughtSpecies.add('pebblit');
+          this.closeAllMenus();
+          const evoTo = checkEvolution(received, { kind: 'trade' });
+          const lines = [
+            `You traded away ${displayName(given)}!`,
+            `You received ${displayName(received)}! Take good care of it.`,
+          ];
+          if (evoTo) {
+            lines.push('What? The traded Pebblit is glowing!');
+            this.showDialogue(lines, () => {
+              evolve(received, evoTo);
+              this.seenSpecies.add(evoTo);
+              this.caughtSpecies.add(evoTo);
+              this.showDialogue([`It evolved into ${SPECIES[evoTo].name} right after the trade!`]);
+            });
+          } else {
+            this.showDialogue(lines);
+          }
+        },
+        onCancel: () => this.closeAllMenus(),
+      },
+      true,
+    );
   }
 
   starterDialogue(): void {
@@ -548,6 +785,8 @@ export class Game {
             prize: t.prize,
             introText: t.introText,
             defeatText: t.defeatText,
+            ai: t.ai,
+            potions: t.potions,
           },
         },
         (outcome) => {
@@ -575,11 +814,14 @@ export class Game {
 
   startWildBattle(): void {
     const table = this.map.encounters;
-    const total = table.reduce((s, e) => s + e.weight, 0);
+    const night = phaseFor(this.minute) === 'night';
+    const weightOf = (e: (typeof table)[number]): number =>
+      night ? (e.nightWeight ?? e.weight * 0.25) : e.weight;
+    const total = table.reduce((s, e) => s + weightOf(e), 0);
     let roll = rand() * total;
     let entry = table[0];
     for (const e of table) {
-      roll -= e.weight;
+      roll -= weightOf(e);
       if (roll <= 0) {
         entry = e;
         break;
@@ -604,11 +846,16 @@ export class Game {
   }
 
   whiteOut(): void {
+    const lost = Math.floor(this.money / 2);
+    this.money -= lost;
     for (const m of this.party) healFull(m);
     this.mapId = this.healPoint.map;
     this.px = this.healPoint.x;
     this.py = this.healPoint.y;
-    this.showDialogue(['You scurried back to safety and your Mockemon were fully healed.']);
+    this.showDialogue([
+      `You panicked and dropped $${lost}...`,
+      'You scurried back to safety and your Mockemon were fully healed.',
+    ]);
   }
 
   // ---------- battle UI ----------
@@ -637,8 +884,8 @@ export class Game {
   battleAct(action: PlayerAction): void {
     const b = this.battle!;
     if (action.type === 'item') {
-      if (this.inventory[action.item] <= 0) {
-        this.battleMsgs = [`You have no ${ITEM_NAMES[action.item]} left!`];
+      if ((this.inventory[action.item] ?? 0) <= 0) {
+        this.battleMsgs = [`You have no ${itemName(action.item)} left!`];
         this.battlePhase = 'msg';
         return;
       }
@@ -697,25 +944,27 @@ export class Game {
 
     if (this.battlePhase === 'moves') {
       const moves = b.active.moves;
+      const struggleOnly = moves.every((ms) => ms.pp <= 0);
+      const count = struggleOnly ? 1 : moves.length;
       if (k === 'up') this.battleMenuIndex = Math.max(0, this.battleMenuIndex - 1);
-      if (k === 'down') this.battleMenuIndex = Math.min(moves.length - 1, this.battleMenuIndex + 1);
+      if (k === 'down') this.battleMenuIndex = Math.min(count - 1, this.battleMenuIndex + 1);
       if (k === 'b') {
         this.battlePhase = 'action';
         this.battleMenuIndex = 0;
       }
-      if (k === 'a') this.battleAct({ type: 'move', index: this.battleMenuIndex });
+      if (k === 'a') this.battleAct({ type: 'move', index: struggleOnly ? 0 : this.battleMenuIndex });
       return;
     }
 
     if (this.battlePhase === 'bag') {
-      const items: ItemId[] = ['potion', 'superpotion', 'mockball'];
+      const items = ['potion', 'superpotion', 'mockball'];
       if (k === 'up') this.battleMenuIndex = Math.max(0, this.battleMenuIndex - 1);
       if (k === 'down') this.battleMenuIndex = Math.min(items.length - 1, this.battleMenuIndex + 1);
       if (k === 'b') {
         this.battlePhase = 'action';
         this.battleMenuIndex = 1;
       }
-      if (k === 'a') this.battleAct({ type: 'item', item: items[this.battleMenuIndex] });
+      if (k === 'a') this.battleAct({ type: 'item', item: items[this.battleMenuIndex] as 'potion' | 'superpotion' | 'mockball' });
       return;
     }
 
@@ -729,7 +978,7 @@ export class Game {
       if (k === 'a') {
         const idx = this.battleMenuIndex;
         const target = this.party[idx];
-        if (!target || target.hp <= 0) return;
+        if (!target || target.hp <= 0 || target.isEgg) return;
         if (this.battleForcedSwitch) {
           const msgs: string[] = [];
           b.forcedSwitch(idx, msgs);
@@ -745,14 +994,57 @@ export class Game {
     }
   }
 
+  processPendingMoves(done?: () => void): void {
+    const mon = this.party.find((m) => m.pendingMoves.length > 0);
+    if (!mon) {
+      if (done) done();
+      return;
+    }
+    const moveId = mon.pendingMoves[0];
+    const mv = MOVES[moveId];
+    this.openMenu({
+      title: `${displayName(mon)} wants to learn ${mv.name}!`,
+      items: [...mon.moves.map((ms) => `Forget ${MOVES[ms.id].name}`), 'Keep old moves'],
+      index: 0,
+      info: [`${mv.type} / ${mv.category} / pow ${mv.power}`, 'Choose a move to forget:'],
+      onSelect: (i) => {
+        if (i < mon.moves.length) {
+          const forgotten = MOVES[mon.moves[i].id].name;
+          learnMove(mon, moveId, i);
+          mon.pendingMoves.shift();
+          this.closeAllMenus();
+          this.showDialogue(
+            [`1, 2, and... Poof!`, `${displayName(mon)} forgot ${forgotten} and learned ${mv.name}!`],
+            () => this.processPendingMoves(done),
+          );
+        } else {
+          mon.pendingMoves.shift();
+          this.closeAllMenus();
+          this.showDialogue([`${displayName(mon)} gave up on learning ${mv.name}.`], () =>
+            this.processPendingMoves(done),
+          );
+        }
+      },
+      onCancel: null, // the prompt must be answered
+    });
+  }
+
   endBattle(): void {
     const b = this.battle!;
     const outcome = b.outcome ?? 'run';
     this.mode = 'overworld';
     const cb = this.battleOnEnd;
     this.battleOnEnd = null;
-    if (cb) cb(outcome);
-    this.battle = null;
+    const finish = (): void => {
+      if (cb) cb(outcome); // cb may read battle.caughtMon
+      this.battle = null;
+    };
+    // forget-a-move prompts run first, then the battle-end callback (badge dialogue etc.)
+    if (this.party.some((m) => m.pendingMoves.length > 0)) {
+      this.processPendingMoves(finish);
+    } else {
+      finish();
+    }
   }
 
   // ---------- start menu / shop / bag / party ----------
@@ -760,17 +1052,17 @@ export class Game {
   openStartMenu(): void {
     this.openMenu({
       title: 'MENU',
-      items: ['MOCKEMON', 'BAG', 'MOCKDEX', 'SAVE', 'EXIT'],
+      items: ['MOCKEMON', 'BAG', 'MOCKDEX', 'STORAGE', 'SAVE', 'EXIT'],
       index: 0,
       onSelect: (i) => {
         if (i === 0) this.openPartyMenu(null);
         else if (i === 1) this.openBagMenu();
         else if (i === 2) {
-          this.closeAllMenus();
-          this.showDialogue([
-            `MOCKDEX  Seen: ${this.seenSpecies.size} / 20   Caught: ${this.caughtSpecies.size} / 20`,
-          ]);
-        } else if (i === 3) {
+          this.menu = null;
+          this.dexIndex = 0;
+          this.mode = 'dex';
+        } else if (i === 3) this.openStorageMenu();
+        else if (i === 4) {
           this.save();
           this.closeAllMenus();
           this.showDialogue(['Your progress was saved!']);
@@ -780,58 +1072,116 @@ export class Game {
     });
   }
 
-  openPartyMenu(healItem: ItemId | null): void {
+  partyEntryLabel(m: Mockemon): string {
+    if (m.isEgg) return `EGG  (steps: ${m.hatchSteps ?? 0})`;
+    return `${displayName(m)} Lv${m.level}  ${m.hp}/${m.maxHp}${m.status ? ' ' + m.status : ''}${m.heldItem ? '  @' + itemName(m.heldItem) : ''}`;
+  }
+
+  openPartyMenu(healItem: string | null, push = true): void {
     this.pendingHealItem = healItem;
     this.openMenu(
       {
-        title: healItem ? `Use ${ITEM_NAMES[healItem]} on:` : 'MOCKEMON',
-        items: this.party.map(
-          (m) => `${m.nickname} Lv${m.level}  ${m.hp}/${m.maxHp}${m.status ? ' ' + m.status : ''}`,
-        ),
+        title: healItem
+          ? `Use ${itemName(healItem)} on:`
+          : this.pendingGiveItem
+            ? `Give ${itemName(this.pendingGiveItem)} to:`
+            : this.pendingStone
+              ? `Use ${itemName(this.pendingStone)} on:`
+              : 'MOCKEMON',
+        items: this.party.map((m) => this.partyEntryLabel(m)),
         index: 0,
         onSelect: (i) => {
           const mon = this.party[i];
           if (this.pendingHealItem) {
             const item = this.pendingHealItem;
-            if (mon.hp <= 0) return;
-            if (mon.hp >= mon.maxHp) return;
-            const heal = item === 'potion' ? 20 : 50;
+            if (mon.isEgg || mon.hp <= 0 || mon.hp >= mon.maxHp) return;
+            const heal = ITEMS[item].healAmount ?? 20;
             this.inventory[item]--;
             mon.hp = Math.min(mon.maxHp, mon.hp + heal);
             this.pendingHealItem = null;
             this.closeAllMenus();
-            this.showDialogue([`${mon.nickname} was healed!`]);
+            this.showDialogue([`${displayName(mon)} was healed!`]);
+          } else if (this.pendingGiveItem) {
+            const item = this.pendingGiveItem;
+            const swapped = mon.heldItem;
+            this.inventory[item]--;
+            if (swapped) this.inventory[swapped] = (this.inventory[swapped] ?? 0) + 1;
+            mon.heldItem = item;
+            this.pendingGiveItem = null;
+            this.closeAllMenus();
+            this.showDialogue([
+              swapped
+                ? `${displayName(mon)} swapped ${itemName(swapped)} for ${itemName(item)}!`
+                : `${displayName(mon)} is now holding ${itemName(item)}!`,
+            ]);
+          } else if (this.pendingStone) {
+            const stone = this.pendingStone;
+            const evoTo = checkEvolution(mon, { kind: 'stone', stone });
+            if (!evoTo) {
+              this.showDialogue(['It would not have any effect.'], () => this.openPartyMenu(null, false));
+              this.pendingStone = null;
+              this.mode = 'overworld';
+              return;
+            }
+            this.inventory[stone]--;
+            this.pendingStone = null;
+            this.closeAllMenus();
+            const oldName = displayName(mon);
+            evolve(mon, evoTo);
+            this.seenSpecies.add(evoTo);
+            this.caughtSpecies.add(evoTo);
+            this.showDialogue([`What? ${oldName} is glowing!`, `${oldName} evolved into ${SPECIES[evoTo].name}!`]);
           } else {
-            this.summaryMon = mon;
-            this.mode = 'summary';
+            this.openPartyContext(mon);
           }
         },
         onCancel: () => {
           this.pendingHealItem = null;
+          this.pendingGiveItem = null;
+          this.pendingStone = null;
           this.closeMenu();
         },
       },
-      true,
+      push,
     );
   }
 
-  openBagMenu(): void {
-    const items: ItemId[] = ['potion', 'superpotion', 'mockball'];
+  openPartyContext(mon: Mockemon): void {
+    const options = mon.isEgg ? ['SUMMARY', 'CANCEL'] : ['SUMMARY', 'TAKE ITEM', 'CANCEL'];
     this.openMenu(
       {
-        title: 'BAG',
-        items: items.map((i) => `${ITEM_NAMES[i]} x${this.inventory[i]}`),
+        title: displayName(mon),
+        items: options,
         index: 0,
-        info: [`Money: $${this.money}`],
         onSelect: (i) => {
-          const item = items[i];
-          if (this.inventory[item] <= 0) return;
-          if (item === 'mockball') {
-            this.closeAllMenus();
-            this.showDialogue(['Better save it for a wild Mockemon!']);
-            return;
+          const sel = options[i];
+          if (sel === 'SUMMARY') {
+            this.summaryMon = mon;
+            this.mode = 'summary';
+          } else if (sel === 'TAKE ITEM') {
+            if (!mon.heldItem) {
+              this.showDialogue([`${displayName(mon)} is not holding anything.`], () => {
+                this.mode = 'overworld';
+                this.openPartyMenu(null, false);
+              });
+              this.menu = null;
+              this.menuStack = [];
+              this.mode = 'dialogue';
+              return;
+            }
+            const item = mon.heldItem;
+            mon.heldItem = null;
+            this.inventory[item] = (this.inventory[item] ?? 0) + 1;
+            this.showDialogue([`Took back ${itemName(item)} from ${displayName(mon)}.`], () => {
+              this.mode = 'overworld';
+              this.openPartyMenu(null, false);
+            });
+            this.menu = null;
+            this.menuStack = [];
+            this.mode = 'dialogue';
+          } else {
+            this.closeMenu();
           }
-          this.openPartyMenu(item);
         },
         onCancel: () => this.closeMenu(),
       },
@@ -839,19 +1189,147 @@ export class Game {
     );
   }
 
+  openBagMenu(): void {
+    const owned = Object.keys(ITEMS).filter((id) => (this.inventory[id] ?? 0) > 0);
+    this.openMenu(
+      {
+        title: 'BAG',
+        items: owned.length > 0 ? owned.map((id) => `${itemName(id)} x${this.inventory[id]}`) : ['(empty)'],
+        index: 0,
+        info: [`Money: $${this.money}`],
+        onSelect: (i) => {
+          const id = owned[i];
+          if (!id) return;
+          const def2 = ITEMS[id];
+          if (def2.kind === 'ball') {
+            this.closeAllMenus();
+            this.showDialogue(['Better save it for a wild Mockemon!']);
+            return;
+          }
+          if (def2.kind === 'medicine') {
+            this.pendingGiveItem = null;
+            this.pendingStone = null;
+            this.openPartyMenu(id);
+            return;
+          }
+          if (def2.kind === 'stone') {
+            this.pendingGiveItem = null;
+            this.pendingHealItem = null;
+            this.pendingStone = id;
+            this.openPartyMenu(null);
+            return;
+          }
+          if (def2.kind === 'held') {
+            this.pendingHealItem = null;
+            this.pendingStone = null;
+            this.pendingGiveItem = id;
+            this.openPartyMenu(null);
+          }
+        },
+        onCancel: () => this.closeMenu(),
+      },
+      true,
+    );
+  }
+
+  openStorageMenu(): void {
+    this.openMenu(
+      {
+        title: 'PC STORAGE',
+        items: ['DEPOSIT', 'WITHDRAW', 'BACK'],
+        index: 0,
+        info: [`Party: ${this.party.length}/6   Stored: ${this.storage.length}`],
+        onSelect: (i) => {
+          if (i === 0) this.openStorageDeposit();
+          else if (i === 1) this.openStorageWithdraw();
+          else this.closeMenu();
+        },
+        onCancel: () => this.closeMenu(),
+      },
+      true,
+    );
+  }
+
+  openStorageDeposit(): void {
+    if (this.party.length <= 1) {
+      this.showDialogue(['You must keep at least one Mockemon with you!'], () => this.openStorageMenu());
+      this.menu = null;
+      this.mode = 'dialogue';
+      return;
+    }
+    this.openMenu(
+      {
+        title: 'Deposit which?',
+        items: this.party.map((m) => this.partyEntryLabel(m)),
+        index: 0,
+        onSelect: (i) => {
+          if (this.party.length <= 1) return;
+          const mon = this.party.splice(i, 1)[0];
+          this.storage.push(mon);
+          this.showDialogue([`${mon.isEgg ? 'The Egg' : displayName(mon)} was stored.`], () => {
+            this.mode = 'overworld';
+            this.openStorageMenu();
+          });
+          this.menu = null;
+          this.menuStack = [];
+          this.mode = 'dialogue';
+        },
+        onCancel: () => this.openStorageMenu(),
+      },
+      true,
+    );
+  }
+
+  openStorageWithdraw(): void {
+    if (this.storage.length === 0) {
+      this.showDialogue(['Storage is empty.'], () => this.openStorageMenu());
+      this.menu = null;
+      this.mode = 'dialogue';
+      return;
+    }
+    if (this.party.length >= 6) {
+      this.showDialogue(['Your party is full!'], () => this.openStorageMenu());
+      this.menu = null;
+      this.mode = 'dialogue';
+      return;
+    }
+    this.openMenu(
+      {
+        title: 'Withdraw which?',
+        items: this.storage.map((m) => this.partyEntryLabel(m)),
+        index: 0,
+        onSelect: (i) => {
+          if (this.party.length >= 6) return;
+          const mon = this.storage.splice(i, 1)[0];
+          this.party.push(mon);
+          this.showDialogue([`${mon.isEgg ? 'The Egg' : displayName(mon)} joined your party!`], () => {
+            this.mode = 'overworld';
+            this.openStorageMenu();
+          });
+          this.menu = null;
+          this.menuStack = [];
+          this.mode = 'dialogue';
+        },
+        onCancel: () => this.openStorageMenu(),
+      },
+      true,
+    );
+  }
+
   openShop(): void {
-    const items: ItemId[] = ['potion', 'superpotion', 'mockball'];
+    const stock = SHOP_STOCK;
     this.openMenu({
       title: 'MOCK MART',
-      items: items.map((i) => `${ITEM_NAMES[i]}  $${SHOP_PRICES[i]}`),
+      items: stock.map((id) => `${itemName(id)}  $${ITEMS[id].price}`),
       index: 0,
       info: [`Money: $${this.money}`, 'A: buy 1   B: leave'],
       onSelect: (i) => {
-        const item = items[i];
-        if (this.money < SHOP_PRICES[item]) return;
-        this.money -= SHOP_PRICES[item];
-        this.inventory[item]++;
-        this.menu!.info = [`Money: $${this.money}`, `Bought ${ITEM_NAMES[item]}!`];
+        const id = stock[i];
+        const price = ITEMS[id].price;
+        if (this.money < price) return;
+        this.money -= price;
+        this.inventory[id] = (this.inventory[id] ?? 0) + 1;
+        this.menu!.info = [`Money: $${this.money}`, `Bought ${itemName(id)}!`];
       },
       onCancel: () => {
         this.closeAllMenus();
@@ -864,6 +1342,8 @@ export class Game {
 
   update(): void {
     this.frame++;
+    // in-game clock: 1 game minute every 10 frames (full day ~4 real minutes)
+    if (this.mode !== 'title' && this.frame % 10 === 0) this.minute = (this.minute + 1) % 1440;
     switch (this.mode) {
       case 'title': {
         const k = consumePress();
@@ -910,6 +1390,16 @@ export class Game {
         if (k === 'a' || k === 'b') this.mode = 'menu';
         break;
       }
+      case 'dex': {
+        const k = consumePress();
+        if (!k) break;
+        if (k === 'up') this.dexIndex = (this.dexIndex - 1 + DEX_ORDER.length) % DEX_ORDER.length;
+        if (k === 'down') this.dexIndex = (this.dexIndex + 1) % DEX_ORDER.length;
+        if (k === 'b' || k === 'start') {
+          this.mode = 'menu';
+        }
+        break;
+      }
       case 'ending': {
         const k = consumePress();
         if (k === 'a' || k === 'start') {
@@ -940,15 +1430,64 @@ export class Game {
       case 'summary':
         this.renderSummary();
         break;
+      case 'dex':
+        this.renderDex();
+        break;
       case 'ending':
         this.renderEnding();
         break;
       default:
         this.renderOverworld();
+        this.renderTint();
         if (this.mode === 'dialogue') this.renderDialogue();
         if (this.mode === 'menu') this.renderMenu();
     }
     this.renderControlsBar();
+  }
+
+  renderTint(): void {
+    if (this.map.indoor) return;
+    const t = tintFor(phaseFor(this.minute));
+    if (t.alpha <= 0) return;
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.globalAlpha = t.alpha;
+    ctx.fillStyle = t.color;
+    ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+    ctx.restore();
+  }
+
+  renderDex(): void {
+    const ctx = this.ctx;
+    ctx.fillStyle = '#29366f';
+    ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+    text(ctx, `MOCKDEX   Seen ${this.seenSpecies.size}/26   Caught ${this.caughtSpecies.size}/26`, 20, 24, '#ffd93b', 13);
+    const perPage = 11;
+    const page = Math.floor(this.dexIndex / perPage);
+    const start = page * perPage;
+    for (let i = start; i < Math.min(start + perPage, DEX_ORDER.length); i++) {
+      const key = DEX_ORDER[i];
+      const s = SPECIES[key];
+      const row = i - start;
+      const sel = i === this.dexIndex;
+      const seen = this.seenSpecies.has(key);
+      const caught = this.caughtSpecies.has(key);
+      const label = seen ? s.name : '----------';
+      const ball = caught ? '\u25cf ' : '  ';
+      text(ctx, `${sel ? '>' : ' '} ${ball}${String(s.id).padStart(2, ' ')}. ${label}`, 20, 52 + row * 22, sel ? '#ffd93b' : seen ? '#ffffff' : '#8fa3c0', 13);
+    }
+    const key = DEX_ORDER[this.dexIndex];
+    const s = SPECIES[key];
+    if (this.seenSpecies.has(key)) {
+      drawSprite(ctx, MON_SPRITES[key], 330, 52, 4);
+      text(ctx, s.types.join(' / '), 330, 140, '#c0cbdc', 12);
+      if (this.caughtSpecies.has(key)) {
+        wrap(s.dex, 26).slice(0, 5).forEach((l, i) => text(ctx, l, 300, 170 + i * 18, '#8fa3c0', 11));
+      } else {
+        text(ctx, 'Not caught yet.', 300, 170, '#8fa3c0', 11);
+      }
+    }
+    text(ctx, 'X/Esc: back', 380, 306, '#8fa3c0', 11);
   }
 
   renderControlsBar(): void {
@@ -960,6 +1499,7 @@ export class Game {
       menu: '\u2191\u2193 select   Z/Enter ok   X/Esc back',
       battle: '\u2190\u2191\u2193\u2192 select   Z/Enter ok   X/Esc back',
       summary: 'Z/Enter or X/Esc back',
+      dex: '\u2191\u2193 browse   X/Esc back',
       ending: 'Z/Enter continue',
     };
     ctx.fillStyle = '#11131f';
@@ -1035,9 +1575,11 @@ export class Game {
       2,
       this.facing === 'left',
     );
-    // location banner
+    // location banner + clock
     panel(ctx, 6, 6, 150, 24);
     text(ctx, map.name, 12, 22, '#ffffff', 12);
+    panel(ctx, VIEW_W - 86, 6, 80, 24);
+    text(ctx, formatTime(this.minute), VIEW_W - 46, 22, phaseFor(this.minute) === 'night' ? '#7fc8f8' : '#ffd93b', 12, true);
   }
 
   drawTile(tx: number, ty: number, x: number, y: number): void {
@@ -1228,8 +1770,15 @@ export class Game {
     const s = def(m);
     ctx.fillStyle = '#29366f';
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+    if (m.isEgg) {
+      text(ctx, 'EGG', 240, 60, '#ffd93b', 24, true);
+      text(ctx, `It looks like it will hatch soon... (${m.hatchSteps ?? 0} steps left)`, 240, 120, '#c0cbdc', 12, true);
+      text(ctx, 'Watch over it as you walk!', 240, 150, '#8fa3c0', 12, true);
+      text(ctx, 'Press B to go back', 360, 310, '#8fa3c0', 10);
+      return;
+    }
     drawSprite(ctx, MON_SPRITES[m.species], 30, 30, 6);
-    text(ctx, `${m.nickname}  Lv${m.level}`, 160, 40, '#ffffff', 16);
+    text(ctx, `${displayName(m)}  Lv${m.level}${m.gender ? (m.gender === 'M' ? ' \u2642' : ' \u2640') : ''}`, 160, 40, '#ffffff', 16);
     s.types.forEach((t, i) => {
       ctx.fillStyle = TYPE_COLORS[t];
       ctx.fillRect(160 + i * 74, 50, 68, 18);
@@ -1239,12 +1788,15 @@ export class Game {
     text(ctx, `ATK ${m.atk}   DEF ${m.def}`, 160, 112, '#ffffff', 12);
     text(ctx, `SPA ${m.spa}   SPD ${m.spd}   SPE ${m.spe}`, 160, 132, '#ffffff', 12);
     text(ctx, `EXP ${m.exp}  (next: ${expForLevel(growthOf(m), m.level + 1)})`, 160, 152, '#8fa3c0', 11);
-    text(ctx, 'MOVES', 30, 190, '#ffd93b', 13);
+    const ability = ABILITIES[m.ability];
+    text(ctx, `Nature: ${m.nature}   Ability: ${ability?.name ?? m.ability}`, 160, 172, '#8fa3c0', 11);
+    text(ctx, `Item: ${m.heldItem ? itemName(m.heldItem) : 'none'}   Friendship: ${m.friendship}`, 160, 190, '#8fa3c0', 11);
+    text(ctx, 'MOVES', 30, 212, '#ffd93b', 13);
     m.moves.forEach((ms, i) => {
       const mv = MOVES[ms.id];
-      text(ctx, `${mv.name}  (${mv.type})  PP ${ms.pp}/${mv.pp}`, 30, 212 + i * 20, '#ffffff', 12);
+      text(ctx, `${mv.name}  (${mv.type})  PP ${ms.pp}/${mv.pp}`, 30, 232 + i * 18, '#ffffff', 12);
     });
-    text(ctx, wrap(s.dex, 60)[0] ?? '', 30, 300, '#c0cbdc', 10);
+    text(ctx, wrap(s.dex, 60)[0] ?? '', 30, 310, '#c0cbdc', 10);
     text(ctx, 'Press B to go back', 360, 310, '#8fa3c0', 10);
   }
 
@@ -1266,11 +1818,23 @@ export class Game {
     ctx.ellipse(110, 226, 90, 22, 0, 0, Math.PI * 2);
     ctx.fill();
 
+    // weather/terrain indicator
+    if (b.weather || b.terrain) {
+      const label = [
+        b.weather ? { sun: 'Harsh Sun', rain: 'Rain', sand: 'Sandstorm' }[b.weather] : '',
+        b.terrain ? (b.terrain === 'electric' ? 'Electric Terrain' : 'Grassy Terrain') : '',
+      ]
+        .filter(Boolean)
+        .join(' + ');
+      panel(ctx, VIEW_W - 160, 12, 148, 22);
+      text(ctx, label, VIEW_W - 86, 27, '#ffd93b', 10, true);
+    }
+
     // enemy
     const enemy = b.enemy;
     drawSprite(ctx, MON_SPRITES[enemy.species], 310, 40, 6);
     panel(ctx, 10, 12, 200, 54);
-    text(ctx, `${enemy.nickname}  Lv${enemy.level}`, 20, 30, '#ffffff', 12);
+    text(ctx, `${displayName(enemy)}  Lv${enemy.level}`, 20, 30, '#ffffff', 12);
     hpBar(ctx, 20, 40, 160, enemy.hp / enemy.maxHp);
     if (enemy.status) text(ctx, enemy.status, 176, 60, '#e63946', 10);
 
@@ -1278,7 +1842,7 @@ export class Game {
     const mine = b.active;
     drawSprite(ctx, MON_SPRITES[mine.species], 50, 140, 6, true);
     panel(ctx, 260, 150, 210, 74);
-    text(ctx, `${mine.nickname}  Lv${mine.level}`, 270, 168, '#ffffff', 12);
+    text(ctx, `${displayName(mine)}  Lv${mine.level}`, 270, 168, '#ffffff', 12);
     hpBar(ctx, 270, 178, 170, mine.hp / mine.maxHp);
     text(ctx, `${mine.hp}/${mine.maxHp}`, 270, 202, '#ffffff', 11);
     if (mine.status) text(ctx, mine.status, 420, 202, '#e63946', 10);
@@ -1299,7 +1863,7 @@ export class Game {
       if (Math.floor(this.frame / 30) % 2 === 0)
         text(ctx, '▼', VIEW_W - 26, VIEW_H - 14, '#ffd93b', 12);
     } else if (this.battlePhase === 'action') {
-      text(ctx, `What will ${mine.nickname} do?`, 16, VIEW_H - 50, '#ffffff', 13);
+      text(ctx, `What will ${displayName(mine)} do?`, 16, VIEW_H - 50, '#ffffff', 13);
       const grid = ['FIGHT', 'BAG', 'MOCKMON', 'RUN'];
       grid.forEach((gLabel, i) => {
         const gx = 250 + (i % 2) * 110;
@@ -1308,26 +1872,33 @@ export class Game {
         text(ctx, (sel ? '> ' : '  ') + gLabel, gx, gy, sel ? '#ffd93b' : '#ffffff', 13);
       });
     } else if (this.battlePhase === 'moves') {
-      b.active.moves.forEach((ms, i) => {
-        const mv = MOVES[ms.id];
-        const sel = i === this.battleMenuIndex;
-        text(
-          ctx,
-          `${sel ? '> ' : '  '}${mv.name}`,
-          16,
-          VIEW_H - 66 + i * 19,
-          sel ? '#ffd93b' : '#ffffff',
-          12,
-        );
-        text(ctx, `${mv.type}  PP ${ms.pp}/${mv.pp}`, 250, VIEW_H - 66 + i * 19, '#8fa3c0', 11);
-      });
+      const struggleOnly = b.active.moves.every((ms) => ms.pp <= 0);
+      if (struggleOnly) {
+        const sel = this.battleMenuIndex === 0;
+        text(ctx, `${sel ? '> ' : '  '}STRUGGLE`, 16, VIEW_H - 66, '#e63946', 12);
+        text(ctx, 'No PP left!', 250, VIEW_H - 66, '#8fa3c0', 11);
+      } else {
+        b.active.moves.forEach((ms, i) => {
+          const mv = MOVES[ms.id];
+          const sel = i === this.battleMenuIndex;
+          text(
+            ctx,
+            `${sel ? '> ' : '  '}${mv.name}`,
+            16,
+            VIEW_H - 66 + i * 19,
+            sel ? '#ffd93b' : ms.pp <= 0 ? '#8fa3c0' : '#ffffff',
+            12,
+          );
+          text(ctx, `${mv.type}  PP ${ms.pp}/${mv.pp}`, 250, VIEW_H - 66 + i * 19, '#8fa3c0', 11);
+        });
+      }
     } else if (this.battlePhase === 'bag') {
-      const items: ItemId[] = ['potion', 'superpotion', 'mockball'];
+      const items = ['potion', 'superpotion', 'mockball'];
       items.forEach((it, i) => {
         const sel = i === this.battleMenuIndex;
         text(
           ctx,
-          `${sel ? '> ' : '  '}${ITEM_NAMES[it]} x${this.inventory[it]}`,
+          `${sel ? '> ' : '  '}${itemName(it)} x${this.inventory[it] ?? 0}`,
           16,
           VIEW_H - 62 + i * 22,
           sel ? '#ffd93b' : '#ffffff',
@@ -1337,7 +1908,9 @@ export class Game {
     } else if (this.battlePhase === 'party') {
       this.party.forEach((m, i) => {
         const sel = i === this.battleMenuIndex;
-        const label = `${m.nickname} Lv${m.level} ${m.hp}/${m.maxHp}${m.hp <= 0 ? ' (FNT)' : ''}${i === b.activeIndex ? ' *' : ''}`;
+        const label = m.isEgg
+          ? `EGG${i === b.activeIndex ? ' *' : ''}`
+          : `${displayName(m)} Lv${m.level} ${m.hp}/${m.maxHp}${m.hp <= 0 ? ' (FNT)' : ''}${i === b.activeIndex ? ' *' : ''}`;
         text(ctx, (sel ? '> ' : '  ') + label, 16, VIEW_H - 70 + i * 14, sel ? '#ffd93b' : '#ffffff', 11);
       });
     }
@@ -1367,7 +1940,7 @@ export class Game {
     text(ctx, 'CONGRATULATIONS!', 240, 155, '#ffd93b', 24, true);
     text(ctx, 'You earned the BOULDER BADGE', 240, 185, '#ffffff', 14, true);
     text(ctx, 'and completed the Pocket Mockster demo!', 240, 205, '#ffffff', 14, true);
-    text(ctx, `MockDex: seen ${this.seenSpecies.size}/20, caught ${this.caughtSpecies.size}/20`, 240, 235, '#c0cbdc', 12, true);
+    text(ctx, `MockDex: seen ${this.seenSpecies.size}/26, caught ${this.caughtSpecies.size}/26`, 240, 235, '#c0cbdc', 12, true);
     text(ctx, 'The world keeps going. Catch them all!', 240, 260, '#c0cbdc', 12, true);
     text(ctx, 'Press Z/Enter to keep playing', 240, 300, '#8fa3c0', 11, true);
   }

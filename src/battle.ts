@@ -44,6 +44,7 @@ interface SideState {
   choiceLock: string | null; // power band
   emberBoost: boolean;
   sashUsed: boolean;
+  aiSetupUsed: boolean; // smart+ AI: one stat-move per switch-in
 }
 
 const zeroStages = (): Record<StageStat, number> => ({ atk: 0, def: 0, spa: 0, spd: 0, spe: 0, acc: 0, eva: 0 });
@@ -61,6 +62,7 @@ const freshSide = (): SideState => ({
   choiceLock: null,
   emberBoost: false,
   sashUsed: false,
+  aiSetupUsed: false,
 });
 
 function stageMult(stage: number): number {
@@ -606,7 +608,13 @@ export class Battle {
         score = 0;
         if (mv.status && !this.active.status && foe.hp > foe.maxHp * 0.5) score = 30;
         if (mv.screen && this.sides.enemy.reflectTurns === 0 && this.sides.enemy.lightScreenTurns === 0 && foe.hp > foe.maxHp * 0.6) score = 35;
-        if (mv.statChange && foe.hp > foe.maxHp * 0.6) score = 25;
+        if (mv.statChange && foe.hp > foe.maxHp * 0.6 && !this.sides.enemy.aiSetupUsed) {
+          const sc = mv.statChange;
+          const targetStages = sc.target === 'self' ? this.sides.enemy.stages : this.sides.player.stages;
+          const cur = targetStages[sc.stat];
+          const capped = sc.stages > 0 ? cur >= 6 : cur <= -6;
+          if (!capped) score = 25;
+        }
         if (mv.healSelf && foe.hp < foe.maxHp * 0.4) score = 70;
       } else {
         score = this.estimateDamage(foe, this.active, mv);
@@ -694,6 +702,7 @@ export class Battle {
         old.leechSeed = false;
         old.charging = null;
         old.choiceLock = null;
+        old.aiSetupUsed = false;
         this.enemy.toxicCounter = 0;
         msgs.push(`${this.trainer!.name} sent out ${displayName(this.enemy)}!`);
         this.applyHazards('enemy', msgs);
@@ -879,6 +888,7 @@ export class Battle {
         enemySkippedForPotion = true;
       } else {
         enemyMoveId = this.enemyPickMove();
+        if (MOVES[enemyMoveId].statChange) this.sides.enemy.aiSetupUsed = true;
       }
     }
 

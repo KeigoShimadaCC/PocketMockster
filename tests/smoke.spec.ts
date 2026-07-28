@@ -56,7 +56,7 @@ test('save and continue restores progress', async ({ page }) => {
   // open start menu and save
   await press(page, 'start');
   await waitMode(page, 'menu');
-  await press(page, 'down', 3);
+  await press(page, 'down', 4); // SAVE is the 5th item now
   await press(page, 'a');
   await waitMode(page, 'dialogue');
   await advanceDialogue(page);

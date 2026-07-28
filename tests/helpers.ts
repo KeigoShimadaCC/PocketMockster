@@ -19,8 +19,19 @@ export interface PMState {
     maxHp: number;
     moves: string[];
     status: string | null;
+    isEgg: boolean;
+    hatchSteps: number;
+    heldItem: string | null;
+    pendingMoves: string[];
+    friendship: number;
+    ability: string;
   }[];
   storageCount: number;
+  storage: { species: string; level: number; isEgg: boolean }[];
+  minute: number;
+  phase: string;
+  daycare: ({ species: string; level: number } | null)[];
+  daycareEgg: boolean;
   dialogue: string | null;
   menu: { title: string; items: string[]; index: number } | null;
   battle: {
@@ -29,7 +40,7 @@ export interface PMState {
     outcome: string | null;
     isTrainer: boolean;
     enemy: { species: string; level: number; hp: number; maxHp: number };
-    active: { species: string; hp: number; moves: string[] };
+    active: { species: string; hp: number; moves: { id: string; pp: number }[] };
   } | null;
   seen: number;
   caught: number;
@@ -52,6 +63,12 @@ declare global {
         healAll: () => void;
         clearInput: () => void;
         clearSave: () => void;
+        setTime: (minute: number) => void;
+        hatchEggs: () => void;
+        setHeldItem: (partyIndex: number, item: string | null) => void;
+        depositDaycare: (a: number, b: number) => void;
+        walk: (steps: number) => void;
+        drainPP: (partyIndex: number) => void;
       };
     };
   }
@@ -109,6 +126,29 @@ export async function walk(page: Page, dir: string, tiles: number): Promise<PMSt
   return s;
 }
 
+// After a battle ends, click through defeat dialogue and any
+// "wants to learn X" forget-a-move prompts until back in the overworld
+// (or another top-level mode like 'ending' or a fresh 'battle').
+export async function settle(page: Page, maxIter = 200): Promise<void> {
+  for (let i = 0; i < maxIter; i++) {
+    const s = await state(page);
+    if (s.mode === 'overworld' || s.mode === 'ending' || s.mode === 'battle' || s.mode === 'title') return;
+    if (s.mode === 'dialogue') {
+      await press(page, 'a');
+    } else if (s.mode === 'menu') {
+      if (s.menu && s.menu.title.includes('wants to learn')) {
+        await press(page, 'up'); // wraps to "Keep old moves"
+        await press(page, 'a');
+      } else {
+        await press(page, 'b');
+      }
+    } else {
+      return;
+    }
+    await page.waitForTimeout(60);
+  }
+}
+
 // Runs a battle to completion by spamming a chosen move, handling messages,
 // forced switches, and returning every battle message observed.
 export async function battleLoop(
@@ -119,7 +159,10 @@ export async function battleLoop(
   const maxIter = (opts.maxTurns ?? 60) * 12;
   for (let i = 0; i < maxIter; i++) {
     const s = await state(page);
-    if (!s.battle || s.mode !== 'battle') return messages;
+    if (!s.battle || s.mode !== 'battle') {
+      await settle(page);
+      return messages;
+    }
     const b = s.battle;
     if (b.phase === 'msg') {
       if (b.message && messages[messages.length - 1] !== b.message) messages.push(b.message);
@@ -128,21 +171,33 @@ export async function battleLoop(
       // FIGHT is index 0 whenever the action menu opens
       await press(page, 'a');
     } else if (b.phase === 'moves') {
-      let moveIndex = opts.moveIndex ?? 0;
-      if (opts.preferMoves) {
-        for (const pm of opts.preferMoves) {
-          const idx = b.active.moves.indexOf(pm);
-          if (idx >= 0) {
-            moveIndex = idx;
-            break;
+      const usable = b.active.moves.filter((m) => m.pp > 0);
+      if (usable.length === 0) {
+        // STRUGGLE row is the only option
+        await press(page, 'a');
+      } else {
+        let moveIndex: number | null = null;
+        if (opts.preferMoves) {
+          for (const pm of opts.preferMoves) {
+            const idx = b.active.moves.findIndex((m) => m.id === pm && m.pp > 0);
+            if (idx >= 0) {
+              moveIndex = idx;
+              break;
+            }
           }
         }
+        if (moveIndex === null) {
+          moveIndex =
+            opts.moveIndex !== undefined && b.active.moves[opts.moveIndex]?.pp > 0
+              ? opts.moveIndex
+              : b.active.moves.findIndex((m) => m.pp > 0);
+        }
+        await press(page, 'down', moveIndex);
+        await press(page, 'a');
       }
-      await press(page, 'down', moveIndex);
-      await press(page, 'a');
     } else if (b.phase === 'party') {
-      // forced switch: pick first healthy mon
-      const idx = s.party.findIndex((m) => m.hp > 0);
+      // forced switch: pick first healthy non-egg mon
+      const idx = s.party.findIndex((m) => m.hp > 0 && !m.isEgg);
       await press(page, 'down', Math.max(0, idx));
       await press(page, 'a');
     } else if (b.phase === 'bag') {
