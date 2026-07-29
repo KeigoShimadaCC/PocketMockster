@@ -1,0 +1,7 @@
+{"type":"system","subtype":"init","apiKeySource":"login","cwd":"/private/tmp/cursor-probe","session_id":"31f856e6-d5aa-46d5-b691-fb1b40d118e5","model":"Composer 2.5","permissionMode":"default"}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Reply with exactly: PROBE_OK"}]},"session_id":"31f856e6-d5aa-46d5-b691-fb1b40d118e5"}
+{"type":"thinking","subtype":"delta","text":"Replying with exactly","session_id":"31f856e6-d5aa-46d5-b691-fb1b40d118e5","timestamp_ms":1785297983030}
+{"type":"thinking","subtype":"delta","text":" \"PROBE_OK\".","session_id":"31f856e6-d5aa-46d5-b691-fb1b40d118e5","timestamp_ms":1785297983031}
+{"type":"thinking","subtype":"completed","session_id":"31f856e6-d5aa-46d5-b691-fb1b40d118e5","timestamp_ms":1785297983032}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"PROBE_OK"}]},"session_id":"31f856e6-d5aa-46d5-b691-fb1b40d118e5"}
+{"type":"result","subtype":"success","duration_ms":9750,"duration_api_ms":9750,"is_error":false,"result":"PROBE_OK","session_id":"31f856e6-d5aa-46d5-b691-fb1b40d118e5","request_id":"bd196afa-6c6d-4e5a-ac0b-44e41a6c4dcc","usage":{"inputTokens":28239,"outputTokens":34,"cacheReadTokens":5957,"cacheWriteTokens":0}}

@@ -1,18 +1,20 @@
 #!/usr/bin/env node
-// Codex player: runs a Codex SDK agent that plays Pocket Mockster live in a
-// browser via the pm-server + MCP bridge. Produces JSONL event logs and a
-// run report (report.md / report.json) under agent-runs/<id>/.
+// Agent player: runs an AI agent (Codex SDK or Cursor CLI) that plays Pocket
+// Mockster live in a browser via the pm-server + MCP bridge. Produces JSONL
+// event logs and a run report (report.md / report.json) under agent-runs/<id>/.
 //
 // Usage:
-//   node tools/agent/player.mjs --profile casual-kid --goal "Beat gym leader Rocco and earn the badge"
+//   node tools/agent/player.mjs --profile casual-kid --goal "Beat gym 1"
+//   node tools/agent/player.mjs --profile debugger-claude --engine cursor --seed 42
 //   node tools/agent/player.mjs --profile qa-adversary --seed 42 --max-turns 8 --headless
-// Overrides: --model X --effort low|medium|high|xhigh --speed N --seed N --run-id X
+// Overrides: --engine codex|cursor --model X --effort low|medium|high|xhigh --speed N --seed N --run-id X
 
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Codex } from '@openai/codex-sdk';
+import { createCodexSession } from './codex-engine.mjs';
+import { createCursorSession, writeMcpConfig } from './cursor-engine.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const PROFILES_PATH = path.join(REPO_ROOT, 'tools', 'agent', 'profiles.json');
@@ -46,13 +48,13 @@ if (!profile) {
 
 const cfg = {
   profile: profileName,
+  engine: String(args.engine ?? profile.engine ?? 'codex'),
   goal: String(args.goal ?? 'Start a new game, get your starter, explore outside, and win your first wild battle.'),
   model: String(args.model ?? profile.model),
-  effort: String(args.effort ?? profile.effort),
+  effort: String(args.effort ?? profile.effort ?? 'medium'),
   speed: Number(args.speed ?? profile.speed ?? 1),
   seed: args.seed !== undefined ? Number(args.seed) : 42,
   resume: !!args.continue,
-  // long runs should not share a hot-reloading dev server with an editor
   build: args.build !== undefined ? !!args.build : Number(args['max-minutes'] ?? 45) > 20,
   maxTurns: Number(args['max-turns'] ?? 12),
   maxMinutes: Number(args['max-minutes'] ?? 45),
@@ -92,9 +94,15 @@ function buildPrompt() {
     ? 'You may use pm_debug for edge-case probes as your profile allows, but never use it to make story progress in a normal playthrough.'
     : 'NEVER use pm_debug. You must play legitimately: buttons, walking, battles only.';
 
+  const engineNote =
+    cfg.engine === 'cursor'
+      ? '\nOnly use pocketmockster MCP tools. Do not use any other MCP servers that may be available.'
+      : '';
+
   return `${profile.system}
 
 You are playing Pocket Mockster, a GBA-style monster-catching RPG, LIVE in a real browser through MCP tools. A human is watching you play on screen right now.
+${engineNote}
 
 ## How to play
 1. ${cfg.resume ? 'Call pm_continue once at the start to resume the existing save, then pm_state to see where you are.' : `Call pm_new_game(seed=${cfg.seed}) once at the start.`}
@@ -136,8 +144,6 @@ ${cfg.goal}
 Work toward the goal turn by turn. When the goal is fully achieved, make your final message start with exactly "GOAL_COMPLETE" followed by a short summary of what you did and your QA observations. If you become completely unable to progress (blocked, soft-locked, or the game is broken), make your final message start with exactly "STUCK" followed by the reason.`;
 }
 
-// A long run drifts if every turn starts from "keep going": re-anchor the agent
-// on the game's own objective and its measurable progress instead.
 function continuePrompt(info, turn) {
   const d = info.digest;
   const lines = [`Continue playing toward your goal (turn ${turn + 2} of ${cfg.maxTurns}).`];
@@ -206,7 +212,7 @@ async function finalize(status, summary, usage) {
 
 async function main() {
   console.log(
-    `[player] profile=${cfg.profile} model=${cfg.model} effort=${cfg.effort} speed=${cfg.speed}x seed=${cfg.seed}${cfg.resume ? ' (resuming save)' : ''}${cfg.build ? ' (frozen build)' : ''}`,
+    `[player] engine=${cfg.engine} profile=${cfg.profile} model=${cfg.model} effort=${cfg.effort} speed=${cfg.speed}x seed=${cfg.seed}${cfg.resume ? ' (resuming save)' : ''}${cfg.build ? ' (frozen build)' : ''}`,
   );
   console.log(`[player] goal: ${cfg.goal}`);
 
@@ -236,40 +242,57 @@ async function main() {
   await waitHealth();
   console.log('[player] pm-server healthy; browser is live');
 
-  const codex = new Codex({
-    config: {
-      mcp_servers: {
-        pm: {
-          command: process.execPath,
-          args: [MCP_PATH],
-          env: { PM_URL },
-        },
-      },
-    },
-  });
+  let lastAgentText = '';
 
-  const thread = codex.startThread({
-    model: cfg.model,
-    modelReasoningEffort: cfg.effort,
-    sandboxMode: 'read-only',
-    // NOTE: approval_policy "never" auto-cancels MCP tool calls in codex exec;
-    // "on-request" auto-approves them in non-interactive mode.
-    approvalPolicy: 'on-request',
-    skipGitRepoCheck: true,
-    workingDirectory: REPO_ROOT,
-    networkAccessEnabled: false,
-  });
+  const onEvent = (evt) => {
+    switch (evt.type) {
+      case 'agent_message':
+        lastAgentText = evt.text;
+        console.log(`\x1b[36m[agent]\x1b[0m ${evt.text.slice(0, 600)}`);
+        api('/api/log-event', { type: 'agent_message', text: evt.text }).catch(() => {});
+        break;
+      case 'agent_reasoning':
+        console.log(`\x1b[2m[thinking] ${evt.text.slice(0, 240)}\x1b[0m`);
+        api('/api/log-event', { type: 'agent_reasoning', text: evt.text }).catch(() => {});
+        break;
+      case 'tool_call': {
+        const argStr = JSON.stringify(evt.arguments ?? {});
+        console.log(`\x1b[33m[tool]\x1b[0m ${evt.tool}(${argStr.slice(0, 160)})${evt.error ? ' ERROR: ' + evt.error : ''}`);
+        api('/api/log-event', { type: 'agent_tool_call', tool: evt.tool, arguments: evt.arguments, error: evt.error ?? null }).catch(() => {});
+        break;
+      }
+      case 'tool_result':
+        if (evt.error) {
+          api('/api/log-event', { type: 'agent_error', message: `${evt.tool} result error: ${evt.error}` }).catch(() => {});
+        }
+        break;
+      case 'shell':
+        console.log(`\x1b[35m[shell]\x1b[0m ${evt.command.slice(0, 160)}`);
+        api('/api/log-event', { type: 'agent_shell', command: evt.command, exitCode: evt.exitCode ?? null }).catch(() => {});
+        break;
+      case 'error':
+        api('/api/log-event', { type: 'agent_error', message: evt.message }).catch(() => {});
+        break;
+    }
+  };
 
-  const totals = { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 };
+  let engine;
+  if (cfg.engine === 'cursor') {
+    const mcpConfigPath = writeMcpConfig(REPO_ROOT, MCP_PATH, PM_URL);
+    console.log(`[player] cursor MCP config: ${mcpConfigPath}`);
+    engine = createCursorSession({ model: cfg.model, cwd: REPO_ROOT, onEvent });
+  } else {
+    engine = createCodexSession({ model: cfg.model, effort: cfg.effort, cwd: REPO_ROOT, mcpPath: MCP_PATH, pmUrl: PM_URL, onEvent });
+  }
+
   const deadline = Date.now() + cfg.maxMinutes * 60_000;
   let status = 'max-turns';
-  let lastAgentText = '';
 
   const deadlineTimer = setInterval(() => {
     if (Date.now() > deadline && !finalized) {
       status = 'timeout';
       clearInterval(deadlineTimer);
-      finalize(status, `Hit wall-clock limit of ${cfg.maxMinutes} minutes. Last agent message:\n${lastAgentText}`, totals).then(() => process.exit(4));
+      finalize(status, `Hit wall-clock limit of ${cfg.maxMinutes} minutes. Last agent message:\n${lastAgentText}`, engine.totals).then(() => process.exit(4));
     }
   }, 5000);
 
@@ -277,35 +300,12 @@ async function main() {
     let prompt = buildPrompt();
     for (let turn = 0; turn < cfg.maxTurns; turn++) {
       console.log(`\n[player] === turn ${turn + 1}/${cfg.maxTurns} ===`);
-      const streamed = await thread.runStreamed(prompt);
+      const result = await engine.turn(prompt);
+      lastAgentText = result.text;
+      console.log(`[player] turn tokens: in=${result.usage.input_tokens ?? '?'} out=${result.usage.output_tokens ?? '?'}`);
 
-      for await (const event of streamed.events) {
-        if (event.type === 'item.completed') {
-          const item = event.item;
-          if (item.type === 'agent_message') {
-            lastAgentText = item.text;
-            console.log(`\x1b[36m[agent]\x1b[0m ${item.text.slice(0, 600)}`);
-            await api('/api/log-event', { type: 'agent_message', text: item.text });
-          } else if (item.type === 'reasoning') {
-            console.log(`\x1b[2m[thinking] ${item.text.slice(0, 240)}\x1b[0m`);
-            await api('/api/log-event', { type: 'agent_reasoning', text: item.text });
-          } else if (item.type === 'mcp_tool_call') {
-            const argStr = JSON.stringify(item.arguments ?? {});
-            console.log(`\x1b[33m[tool]\x1b[0m ${item.tool}(${argStr.slice(0, 160)})${item.error ? ' ERROR: ' + item.error.message : ''}`);
-            await api('/api/log-event', { type: 'agent_tool_call', tool: item.tool, arguments: item.arguments, error: item.error?.message ?? null });
-          } else if (item.type === 'command_execution') {
-            console.log(`\x1b[35m[shell]\x1b[0m ${item.command.slice(0, 160)}`);
-            await api('/api/log-event', { type: 'agent_shell', command: item.command, exitCode: item.exit_code ?? null });
-          } else if (item.type === 'error') {
-            await api('/api/log-event', { type: 'agent_error', message: item.message });
-          }
-        } else if (event.type === 'turn.completed') {
-          const u = event.usage ?? {};
-          totals.input_tokens += u.input_tokens ?? 0;
-          totals.cached_input_tokens += u.cached_input_tokens ?? 0;
-          totals.output_tokens += u.output_tokens ?? 0;
-          console.log(`[player] turn tokens: in=${u.input_tokens ?? '?'} out=${u.output_tokens ?? '?'}`);
-        }
+      if (result.isError) {
+        console.error(`[player] engine reported error turn`);
       }
 
       const info = await api('/api/run-info');
@@ -333,7 +333,7 @@ async function main() {
     clearInterval(deadlineTimer);
   }
 
-  await finalize(status, lastAgentText, totals);
+  await finalize(status, lastAgentText, engine.totals);
   serverProc?.kill('SIGTERM');
   process.exit(status === 'completed' || status === 'cleared' ? 0 : status === 'stuck' ? 2 : 3);
 }
