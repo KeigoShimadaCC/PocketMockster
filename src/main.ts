@@ -108,7 +108,13 @@ window.__PM = {
             active: {
               species: game.battle.active.species,
               hp: game.battle.active.hp,
-              moves: game.battle.active.moves.map((ms) => ({ id: ms.id, pp: ms.pp })),
+              moves: game.battle.active.moves.map((ms) => ({
+                id: ms.id,
+                name: MOVES[ms.id]?.name ?? ms.id,
+                pp: ms.pp,
+                category: MOVES[ms.id]?.category ?? 'physical',
+                power: MOVES[ms.id]?.power ?? 0,
+              })),
             },
           }
         : null,

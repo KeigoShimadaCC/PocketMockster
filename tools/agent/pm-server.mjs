@@ -673,10 +673,20 @@ async function battleLoop(opts = {}) {
           }
         }
         if (moveIndex === null) {
-          moveIndex =
-            opts.moveIndex !== undefined && b.active.moves[opts.moveIndex]?.pp > 0
-              ? opts.moveIndex
-              : b.active.moves.findIndex((m) => m.pp > 0);
+          if (opts.moveIndex !== undefined && b.active.moves[opts.moveIndex]?.pp > 0) {
+            moveIndex = opts.moveIndex;
+          } else {
+            // Prefer the strongest damaging move over status moves (Growl, etc.)
+            const damaging = b.active.moves
+              .map((m, i) => ({ i, category: m.category, power: m.power }))
+              .filter((m) => b.active.moves[m.i].pp > 0 && m.category !== 'status');
+            if (damaging.length > 0) {
+              damaging.sort((a, b) => (b.power ?? 0) - (a.power ?? 0));
+              moveIndex = damaging[0].i;
+            } else {
+              moveIndex = b.active.moves.findIndex((m) => m.pp > 0);
+            }
+          }
         }
         await pressKeys([...Array(moveIndex).fill('down'), 'a']);
       }
@@ -712,16 +722,81 @@ async function grind(opts = {}) {
   const leadLevel = (s) => (s.party[0] ? s.party[0].level : 0);
   let s = await getState();
   const startLevel = leadLevel(s);
+  const startMap = s.map;
 
   if (targetLevel !== null && startLevel >= targetLevel) {
     out.stoppedBecause = 'already-at-target';
     return { ...out, state: s };
   }
 
-  const dirs = ['left', 'right', 'up', 'down'];
-  let dirIdx = 0;
-  for (let i = 0; i < maxBattles * 40; i++) {
+  // Find grass tiles near the player so we can pace on them without
+  // wandering off-map through warps (the previous version rotated through
+  // all 4 directions and routinely walked into other maps).
+  const mapInfo = await page.evaluate(() => window.__PM.debug.mapInfo());
+  const tiles = mapInfo.tiles;
+  const isGrass = (x, y) =>
+    y >= 0 && y < tiles.length && x >= 0 && x < tiles[0].length && tiles[y][x] === 'G';
+
+  // Find a grass tile at or near the player
+  let gx = s.x;
+  let gy = s.y;
+  if (!isGrass(gx, gy)) {
+    let found = false;
+    for (let radius = 1; radius <= 6 && !found; radius++) {
+      for (let dy = -radius; dy <= radius && !found; dy++) {
+        for (let dx = -radius; dx <= radius && !found; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== radius) continue;
+          if (isGrass(s.x + dx, s.y + dy)) {
+            gx = s.x + dx;
+            gy = s.y + dy;
+            found = true;
+          }
+        }
+      }
+    }
+    if (!found) {
+      out.stoppedBecause = 'no-grass';
+      return { ...out, state: s };
+    }
+    // Walk to the grass tile one step at a time
+    while (s.x !== gx || s.y !== gy) {
+      const dir = s.x < gx ? 'right' : s.x > gx ? 'left' : s.y < gy ? 'down' : s.y > gy ? 'up' : null;
+      if (!dir) break;
+      const r = await walkTiles(dir, 1);
+      s = r.state;
+      if (s.map !== startMap) {
+        out.stoppedBecause = 'left-map';
+        return { ...out, state: s };
+      }
+      if (r.blocked || s.mode !== 'overworld') break;
+    }
+  }
+
+  // Find a pacing direction: prefer a direction where the adjacent tile is
+  // also grass so every step triggers an encounter check.
+  const opp = { left: 'right', right: 'left', up: 'down', down: 'up' };
+  const candidates = [
+    { dir: 'left', dx: -1, dy: 0 },
+    { dir: 'right', dx: 1, dy: 0 },
+    { dir: 'up', dx: 0, dy: -1 },
+    { dir: 'down', dx: 0, dy: 1 },
+  ];
+  let paceDir = 'left';
+  for (const c of candidates) {
+    if (isGrass(gx + c.dx, gy + c.dy)) {
+      paceDir = c.dir;
+      break;
+    }
+  }
+
+  // Main grind loop: pace 1 tile back and forth on grass
+  let toggle = false;
+  for (let i = 0; i < maxBattles * 80; i++) {
     s = await getState();
+    if (s.map !== startMap) {
+      out.stoppedBecause = 'left-map';
+      return { ...out, state: s };
+    }
     if (s.mode === 'battle') {
       const r = await battleLoop({ preferMoves, maxTurns: opts.maxTurns ?? 40 });
       out.battles++;
@@ -731,6 +806,13 @@ async function grind(opts = {}) {
       else if (r.outcome === 'run') out.fled++;
       s = await getState();
       out.levels = s.party.map((m) => `${m.species} L${m.level}`);
+      // A map change after a battle always means a blackout (the game warps
+      // the player to the heal point and heals the party before we can check).
+      if (s.map !== startMap) {
+        out.blackouts++;
+        out.stoppedBecause = 'blackout';
+        return { ...out, state: s };
+      }
       if (s.party.every((m) => m.hp <= 0 || m.isEgg)) {
         out.blackouts++;
         out.stoppedBecause = 'blackout';
@@ -750,8 +832,18 @@ async function grind(opts = {}) {
       await settle();
       continue;
     }
-    const r = await walkTiles(dirs[dirIdx % dirs.length], 2);
-    if (r.blocked || r.walked === 0) dirIdx++;
+    // Pace 1 tile back and forth
+    const dir = toggle ? opp[paceDir] : paceDir;
+    toggle = !toggle;
+    const r = await walkTiles(dir, 1);
+    if (r.state.map !== startMap) {
+      out.stoppedBecause = 'left-map';
+      return { ...out, state: r.state };
+    }
+    if (r.blocked || r.walked === 0) {
+      // Blocked - try the opposite direction next iteration
+      toggle = !toggle;
+    }
   }
   out.stoppedBecause = 'step-budget';
   return { ...out, state: await getState() };

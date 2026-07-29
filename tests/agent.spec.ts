@@ -227,6 +227,52 @@ test('findings: validation, evidence capture, dedupe, and auto-detection', async
   expect(auto.severity).toBe('major');
 });
 
+// Regression: battle state must expose move name/category/power so the
+// battle loop can prefer damaging moves over status moves (Growl spam fix).
+test('battle state exposes move details (name, category, power)', async () => {
+  test.setTimeout(120_000);
+  await api('/api/debug', { action: 'warp', args: ['route1', 4, 3] });
+  for (let i = 0; i < 80; i++) {
+    const r = await api('/api/walk', { dir: i % 2 === 0 ? 'up' : 'down', tiles: 1 });
+    if (r.interrupted === 'battle' || r.state?.mode === 'battle' || r.state?.battle) break;
+  }
+  const s = await api('/api/state');
+  expect(s.raw.battle).toBeTruthy();
+  const moves = s.raw.battle.active.moves;
+  expect(moves.length).toBeGreaterThan(0);
+  for (const m of moves) {
+    expect(typeof m.id).toBe('string');
+    expect(typeof m.name).toBe('string');
+    expect(['physical', 'special', 'status']).toContain(m.category);
+    expect(typeof m.power).toBe('number');
+  }
+  // At least one damaging move should exist
+  expect(moves.some((m: any) => m.category !== 'status')).toBe(true);
+  // Run the battle to completion so the next test starts from a clean state
+  await api('/api/battle', { maxTurns: 30 });
+  await api('/api/wait', { mode: 'overworld', timeoutMs: 10_000 });
+});
+
+// Regression: grind must stay on the starting map and not wander through
+// warps to other maps (the old version rotated through all 4 directions).
+test('grind stays on the starting map', async () => {
+  test.setTimeout(120_000);
+  // Ensure we're in overworld before warping (previous test may have left us in a battle)
+  await api('/api/wait', { mode: 'overworld', timeoutMs: 10_000 });
+  await api('/api/debug', { action: 'warp', args: ['route1', 4, 3] });
+  const before = await api('/api/state');
+  const level = Number(/L(\d+)/.exec(before.state.party[0])![1]);
+  const g = await api('/api/grind', { targetLevel: level + 1, maxBattles: 4 });
+  expect(g.ok).toBe(true);
+  // 'left-map' means the grind walked through a warp - that's the bug we fixed
+  expect(g.stoppedBecause).not.toBe('left-map');
+  expect(['target-level', 'max-battles', 'blackout', 'step-budget', 'no-grass']).toContain(g.stoppedBecause);
+  // If grind completed without blackout, the player should still be on route1
+  if (g.stoppedBecause !== 'blackout') {
+    expect(g.state.map).toBe('route1');
+  }
+});
+
 test('map endpoint, battle loop, notes, finalize and artifacts', async () => {
   test.setTimeout(180_000);
 
@@ -308,7 +354,7 @@ test('map endpoint, battle loop, notes, finalize and artifacts', async () => {
 
   const report = JSON.parse(fs.readFileSync(path.join(RUN_DIR, 'report.json'), 'utf8'));
   expect(report.meta.status).toBe('completed');
-  expect(report.stats.battlesRun).toBe(1);
+  expect(report.stats.battlesRun).toBeGreaterThanOrEqual(1);
   expect(report.agentNotes).toContain('e2e scripted observation: pipeline works');
   expect(report.finalState).toBeTruthy();
   expect(report.milestones.some((m: any) => m.kind === 'map-change' && m.to === 'route1')).toBe(true);
