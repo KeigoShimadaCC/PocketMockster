@@ -1520,6 +1520,7 @@ export class Game implements ScriptHost {
         if (i === 0) this.openPartyMenu(null);
         else if (i === 1) this.openBagMenu();
         else if (i === 2) {
+          if (this.menu) this.menuStack.push(this.menu);
           this.menu = null;
           this.dexIndex = 0;
           this.mode = 'dex';
@@ -1899,7 +1900,8 @@ export class Game implements ScriptHost {
         if (k === 'up') this.dexIndex = (this.dexIndex - 1 + DEX_ORDER.length) % DEX_ORDER.length;
         if (k === 'down') this.dexIndex = (this.dexIndex + 1) % DEX_ORDER.length;
         if (k === 'b' || k === 'start') {
-          this.mode = 'menu';
+          this.closeMenu();
+          if (this.menu) this.mode = 'menu';
         }
         break;
       }

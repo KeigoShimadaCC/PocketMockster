@@ -204,3 +204,20 @@ test('agent server health check and pricing table load', async ({ request }) => 
     expect(r.output).toBeGreaterThan(0);
   }
 });
+
+// Bug found by cursor agent: exiting MOCKDEX with B caused a softlock
+test('MOCKDEX back button returns to start menu without softlock', async ({ page }) => {
+  await newGameWithStarter(page, 9908, 0);
+  await press(page, 'start');
+  await waitMode(page, 'menu');
+  await pickMenu(page, 'MOCKDEX');
+  await waitMode(page, 'dex');
+  await press(page, 'b');
+  await waitMode(page, 'menu');
+  const s = await state(page);
+  expect(s.menu).not.toBeNull();
+  expect(s.menu?.items).toContain('MOCKDEX');
+  // close menu and verify we return to overworld
+  await press(page, 'b');
+  await waitMode(page, 'overworld');
+});
