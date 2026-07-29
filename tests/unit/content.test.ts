@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { MAPS, type GameMap } from '../../src/maps';
-import { validateMaps } from '../../src/content/validate';
+import { validateMaps, type ValidationSources } from '../../src/content/validate';
 
 function makeMap(id: string, tiles: string[] = ['...', '...', '...']): GameMap {
   return {
@@ -201,5 +201,194 @@ describe('content validator', () => {
     const unreachable = makeMap('unreachable');
     const issues = validateMaps({ mapletown, unreachable });
     expect(hasMessage(issues, "Map is unreachable from 'mapletown'")).toBe(true);
+  });
+
+  // ---- New cross-reference checks (scripts, quests, flags, rewards) ----
+
+  const emptySources: ValidationSources = { scripts: {}, trainers: {}, quests: {}, items: {}, species: {}, people: {} };
+
+  it('reports unknown battle trainer referenced in a script', () => {
+    const mapletown = makeMap('mapletown');
+    const issues = validateMaps({ mapletown }, {
+      ...emptySources,
+      scripts: { test: [{ t: 'battle', trainer: 'no_such_trainer' }] },
+    });
+    expect(hasMessage(issues, "Unknown battle trainer 'no_such_trainer'")).toBe(true);
+  });
+
+  it('reports unknown giveMon species in a script', () => {
+    const mapletown = makeMap('mapletown');
+    const issues = validateMaps({ mapletown }, {
+      ...emptySources,
+      scripts: { test: [{ t: 'giveMon', species: 'no_such_species', level: 5 }] },
+    });
+    expect(hasMessage(issues, "Unknown species 'no_such_species' in giveMon")).toBe(true);
+  });
+
+  it('reports giveMon level out of range', () => {
+    const mapletown = makeMap('mapletown');
+    const issues = validateMaps({ mapletown }, {
+      ...emptySources,
+      scripts: { test: [{ t: 'giveMon', species: 'nibbit', level: 0 }] },
+      species: { nibbit: {} },
+    });
+    expect(hasMessage(issues, 'giveMon level 0 is outside 1..100')).toBe(true);
+  });
+
+  it('reports unknown giveItem id in a script', () => {
+    const mapletown = makeMap('mapletown');
+    const issues = validateMaps({ mapletown }, {
+      ...emptySources,
+      scripts: { test: [{ t: 'giveItem', item: 'no_such_item' }] },
+    });
+    expect(hasMessage(issues, "Unknown item 'no_such_item' in giveItem")).toBe(true);
+  });
+
+  it('reports unknown shop stock item in a script', () => {
+    const mapletown = makeMap('mapletown');
+    const issues = validateMaps({ mapletown }, {
+      ...emptySources,
+      scripts: { test: [{ t: 'shop', stock: ['no_such_item'] }] },
+    });
+    expect(hasMessage(issues, "Unknown shop stock item 'no_such_item'")).toBe(true);
+  });
+
+  it('reports unknown warp target map in a script', () => {
+    const mapletown = makeMap('mapletown');
+    const issues = validateMaps({ mapletown }, {
+      ...emptySources,
+      scripts: { test: [{ t: 'warp', map: 'ghosttown', x: 0, y: 0 }] },
+    });
+    expect(hasMessage(issues, "Unknown warp target map 'ghosttown'")).toBe(true);
+  });
+
+  it('reports warp in a script landing on a solid tile', () => {
+    const mapletown = makeMap('mapletown', ['...', '.T.', '...']);
+    const issues = validateMaps({ mapletown }, {
+      ...emptySources,
+      scripts: { test: [{ t: 'warp', map: 'mapletown', x: 1, y: 1 }] },
+    });
+    expect(hasMessage(issues, "is on solid tile 'T'")).toBe(true);
+  });
+
+  it('reports unknown quest id in a script', () => {
+    const mapletown = makeMap('mapletown');
+    const issues = validateMaps({ mapletown }, {
+      ...emptySources,
+      scripts: { test: [{ t: 'questStart', quest: 'no_such_quest' }] },
+    });
+    expect(hasMessage(issues, "Unknown quest 'no_such_quest' in questStart")).toBe(true);
+  });
+
+  it('reports unknown quest stage in a script', () => {
+    const mapletown = makeMap('mapletown');
+    const issues = validateMaps({ mapletown }, {
+      ...emptySources,
+      scripts: { test: [{ t: 'questAdvance', quest: 'q1', stage: 'bad' }] },
+      quests: { q1: { id: 'q1', stages: [{ id: 'good' }] } },
+    });
+    expect(hasMessage(issues, "Unknown stage 'bad' for quest 'q1' in questAdvance")).toBe(true);
+  });
+
+  it('walks nested script commands (choice options)', () => {
+    const mapletown = makeMap('mapletown');
+    const issues = validateMaps({ mapletown }, {
+      ...emptySources,
+      scripts: {
+        test: [{
+          t: 'choice',
+          title: 'Pick',
+          options: [
+            { label: 'A', then: [{ t: 'battle', trainer: 'nested_bad' }] },
+          ],
+        }],
+      },
+    });
+    expect(hasMessage(issues, "Unknown battle trainer 'nested_bad'")).toBe(true);
+  });
+
+  it('walks nested script commands (battle onWin)', () => {
+    const mapletown = makeMap('mapletown');
+    const issues = validateMaps({ mapletown }, {
+      ...emptySources,
+      scripts: {
+        test: [{
+          t: 'battle',
+          trainer: 'ok',
+          onWin: [{ t: 'giveItem', item: 'nested_bad_item' }],
+        }],
+      },
+      trainers: { ok: {} },
+    });
+    expect(hasMessage(issues, "Unknown item 'nested_bad_item' in giveItem")).toBe(true);
+  });
+
+  it('warns when a quest giver does not match any NPC id', () => {
+    const mapletown = makeMap('mapletown');
+    const issues = validateMaps({ mapletown }, {
+      ...emptySources,
+      quests: { q1: { id: 'q1', giver: 'no_such_giver', stages: [] } },
+    });
+    expect(hasMessage(issues, "Quest giver 'no_such_giver' does not match any NPC id")).toBe(true);
+  });
+
+  it('reports unknown reward item', () => {
+    const mapletown = makeMap('mapletown');
+    const issues = validateMaps({ mapletown }, {
+      ...emptySources,
+      quests: { q1: { id: 'q1', stages: [], reward: { item: 'no_such_item' } } },
+    });
+    expect(hasMessage(issues, "Unknown reward item 'no_such_item'")).toBe(true);
+  });
+
+  it('reports unknown reward mon species', () => {
+    const mapletown = makeMap('mapletown');
+    const issues = validateMaps({ mapletown }, {
+      ...emptySources,
+      quests: { q1: { id: 'q1', stages: [], reward: { mon: { species: 'no_such_species', level: 10 } } } },
+    });
+    expect(hasMessage(issues, "Unknown reward mon species 'no_such_species'")).toBe(true);
+  });
+
+  it('reports reward mon level out of range', () => {
+    const mapletown = makeMap('mapletown');
+    const issues = validateMaps({ mapletown }, {
+      ...emptySources,
+      quests: { q1: { id: 'q1', stages: [], reward: { mon: { species: 'nibbit', level: 101 } } } },
+      species: { nibbit: {} },
+    });
+    expect(hasMessage(issues, 'Reward mon level 101 is outside 1..100')).toBe(true);
+  });
+
+  it('warns when a flag is read but never set', () => {
+    const mapletown = makeMap('mapletown');
+    const issues = validateMaps({ mapletown }, {
+      ...emptySources,
+      scripts: { test: [{ t: 'if', flag: 'neverSet', then: [] }] },
+    });
+    expect(hasMessage(issues, "Flag 'neverSet' is read but never set")).toBe(true);
+  });
+
+  it('does not warn when a flag is both set and read', () => {
+    const mapletown = makeMap('mapletown');
+    const issues = validateMaps({ mapletown }, {
+      ...emptySources,
+      scripts: { test: [{ t: 'setFlag', flag: 'myFlag' }, { t: 'if', flag: 'myFlag', then: [] }] },
+    });
+    expect(hasMessage(issues, "Flag 'myFlag' is read but never set")).toBe(false);
+  });
+
+  it('does not warn for runtime-generated badge_ flags', () => {
+    const mapletown = makeMap('mapletown');
+    const issues = validateMaps({ mapletown }, {
+      ...emptySources,
+      scripts: { test: [{ t: 'if', flag: 'badge_boulder', then: [] }] },
+    });
+    expect(hasMessage(issues, "Flag 'badge_boulder' is read but never set")).toBe(false);
+  });
+
+  it('reports no new errors for the shipped content registry', () => {
+    const errors = validateMaps(MAPS).filter((issue) => issue.severity === 'error');
+    expect(errors).toEqual([]);
   });
 });

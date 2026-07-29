@@ -1,9 +1,7 @@
 import { Battle, type BattleKind, type PlayerAction } from './battle';
 import { MOVES } from './data/moves';
 import { DEX_ORDER, SPECIES } from './data/species';
-import { ITEMS, shopStock } from './data/items';
-import { ABILITIES } from './data/abilities';
-import { TYPE_COLORS } from './data/types';
+import { ITEMS, itemName, shopStock } from './data/items';
 import { consumePress, isHeld, type Key } from './input';
 import {
   BADGE_FLAG_SHALLOW,
@@ -18,20 +16,17 @@ import {
 } from './maps';
 import { checkEvolution } from './evolution';
 import { breedError, canBreed, makeEgg, tickEgg } from './breeding';
-import { formatTime, phaseFor, tintFor } from './daynight';
+import { phaseFor } from './daynight';
 import {
   createMockemon,
-  def,
   displayName,
   evolve,
   healFull,
-  expForLevel,
-  growthOf,
   learnMove,
   type Mockemon,
 } from './mockemon';
 import { chance, rand, randInt } from './rng';
-import { drawSprite, MON_SPRITES, PEOPLE } from './sprites';
+import { MON_SPRITES } from './sprites';
 import { ScriptRunner, type ScriptHost } from './script';
 import { SCRIPTS } from './content/scripts';
 import { trainerById } from './content/trainers';
@@ -48,12 +43,11 @@ import {
   newestSlot,
   readSlots,
 } from './frontend';
-import { formatPlaytime, hpBar, paginate, panel, text, wrap } from './ui';
-
-const TILE = 32;
-const VIEW_W = 480;
-const VIEW_H = 320; // gameplay area; a controls bar is drawn below it
-const BAR_H = 32;
+import { formatPlaytime, paginate, wrap } from './ui';
+import { BAR_H, TILE, VIEW_H, VIEW_W } from './constants';
+import { renderControlsBar, renderOverworld, renderTint } from './render/overworld';
+import { renderBattle } from './render/battle';
+import { renderDex, renderDialogue, renderEnding, renderMenu, renderSummary, renderTitle } from './render/screens';
 
 export type Facing = 'up' | 'down' | 'left' | 'right';
 
@@ -67,10 +61,6 @@ const TRAINER_UNLOCK_FLAGS: Record<string, string[]> = {
   admin_patch: ['patchBeaten'],
   admin_merge: ['mergeBeaten'],
 };
-
-function itemName(id: string): string {
-  return ITEMS[id]?.name ?? id;
-}
 
 interface MenuState {
   title: string;
@@ -1935,623 +1925,32 @@ export class Game implements ScriptHost {
         this.intro?.render(this.ctx, VIEW_W, VIEW_H);
         break;
       case 'title':
-        this.renderTitle();
+        renderTitle(this);
         break;
       case 'battle':
-        this.renderBattle();
+        renderBattle(this);
         break;
       case 'summary':
-        this.renderSummary();
+        renderSummary(this);
         break;
       case 'dex':
-        this.renderDex();
+        renderDex(this);
         break;
       case 'ending':
-        this.renderEnding();
+        renderEnding(this);
         break;
       case 'credits':
         this.credits?.render(this.ctx, VIEW_W, VIEW_H);
         break;
       default:
-        this.renderOverworld();
-        this.renderTint();
-        if (this.mode === 'dialogue') this.renderDialogue();
-        if (this.mode === 'menu') this.renderMenu();
+        renderOverworld(this);
+        renderTint(this);
+        if (this.mode === 'dialogue') renderDialogue(this);
+        if (this.mode === 'menu') renderMenu(this);
     }
-    this.renderControlsBar();
-  }
-
-  renderTint(): void {
-    if (this.map.indoor) return;
-    const t = tintFor(phaseFor(this.minute));
-    if (t.alpha <= 0) return;
-    const ctx = this.ctx;
-    ctx.save();
-    ctx.globalAlpha = t.alpha;
-    ctx.fillStyle = t.color;
-    ctx.fillRect(0, 0, VIEW_W, VIEW_H);
-    ctx.restore();
-  }
-
-  renderDex(): void {
-    const ctx = this.ctx;
-    ctx.fillStyle = '#29366f';
-    ctx.fillRect(0, 0, VIEW_W, VIEW_H);
-    text(ctx, `MOCKDEX   Seen ${this.seenSpecies.size}/${DEX_ORDER.length}   Caught ${this.caughtSpecies.size}/${DEX_ORDER.length}`, 20, 24, '#ffd93b', 13);
-    const perPage = 11;
-    const page = Math.floor(this.dexIndex / perPage);
-    const start = page * perPage;
-    for (let i = start; i < Math.min(start + perPage, DEX_ORDER.length); i++) {
-      const key = DEX_ORDER[i];
-      const s = SPECIES[key];
-      const row = i - start;
-      const sel = i === this.dexIndex;
-      const seen = this.seenSpecies.has(key);
-      const caught = this.caughtSpecies.has(key);
-      const label = seen ? s.name : '----------';
-      const ball = caught ? '\u25cf ' : '  ';
-      text(ctx, `${sel ? '>' : ' '} ${ball}${String(s.id).padStart(2, ' ')}. ${label}`, 20, 52 + row * 22, sel ? '#ffd93b' : seen ? '#ffffff' : '#8fa3c0', 13);
-    }
-    const key = DEX_ORDER[this.dexIndex];
-    const s = SPECIES[key];
-    if (this.seenSpecies.has(key)) {
-      drawSprite(ctx, MON_SPRITES[key], 330, 52, 4);
-      text(ctx, s.types.join(' / '), 330, 140, '#c0cbdc', 12);
-      if (this.caughtSpecies.has(key)) {
-        wrap(s.dex, 26).slice(0, 5).forEach((l, i) => text(ctx, l, 300, 170 + i * 18, '#8fa3c0', 11));
-      } else {
-        text(ctx, 'Not caught yet.', 300, 170, '#8fa3c0', 11);
-      }
-    }
-    text(ctx, 'X/Esc: back', 380, 306, '#8fa3c0', 11);
-  }
-
-  renderControlsBar(): void {
-    const ctx = this.ctx;
-    const hints: Record<Mode, string> = {
-      intro: 'X/Esc: skip',
-      title: '\u2191\u2193 select   Z/Enter confirm',
-      overworld: '\u2190\u2191\u2193\u2192/WASD move   Z/Enter interact   M/Shift menu',
-      dialogue: 'Z/Enter next',
-      menu: '\u2191\u2193 select   Z/Enter ok   X/Esc back',
-      battle: '\u2190\u2191\u2193\u2192 select   Z/Enter ok   X/Esc back',
-      summary: 'Z/Enter or X/Esc back',
-      dex: '\u2191\u2193 browse   X/Esc back',
-      ending: 'Z/Enter continue',
-      credits: 'X/Esc: skip',
-    };
-    ctx.fillStyle = '#11131f';
-    ctx.fillRect(0, VIEW_H, VIEW_W, BAR_H);
-    ctx.fillStyle = '#333c57';
-    ctx.fillRect(0, VIEW_H, VIEW_W, 2);
-    text(ctx, hints[this.mode], VIEW_W / 2, VIEW_H + 21, '#8fa3c0', 12, true);
-  }
-
-  renderTitle(): void {
-    const ctx = this.ctx;
-    const g = ctx.createLinearGradient(0, 0, 0, VIEW_H);
-    g.addColorStop(0, '#29366f');
-    g.addColorStop(1, '#3b5dc9');
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, VIEW_W, VIEW_H);
-    text(ctx, 'POCKET', 240, 60, '#ffd93b', 40, true);
-    text(ctx, 'MOCKSTER', 240, 100, '#ffffff', 40, true);
-    const keys = Object.keys(MON_SPRITES);
-    const idx = Math.floor(this.frame / 45) % keys.length;
-    drawSprite(ctx, MON_SPRITES[keys[idx]], 240 - 32, 115, 4);
-    const options = this.titleOptions();
-    options.forEach((o, i) => {
-      const sel = i === this.titleIndex;
-      text(ctx, (sel ? '> ' : '  ') + o, 240, 220 + i * 24, sel ? '#ffd93b' : '#c0cbdc', 15, true);
-    });
-    if (this.hasSave()) {
-      const slots = readSlots();
-      const newest = slots.reduce((best, s) => (!s.empty && s.savedAt > best.savedAt ? s : best), slots[0]);
-      if (!newest.empty) {
-        text(ctx, `${newest.lead}  ${newest.badges}B  ${newest.playtime}`, 240, 300, '#8fa3c0', 11, true);
-      }
-    }
-  }
-
-  renderOverworld(): void {
-    const ctx = this.ctx;
-    const map = this.map;
-    const mapW = map.tiles[0].length * TILE;
-    const mapH = map.tiles.length * TILE;
-    const playerPx = this.px * TILE + this.moveOffX;
-    const playerPy = this.py * TILE + this.moveOffY;
-    let camX = playerPx + TILE / 2 - VIEW_W / 2;
-    let camY = playerPy + TILE / 2 - VIEW_H / 2;
-    camX = mapW <= VIEW_W ? (mapW - VIEW_W) / 2 : Math.max(0, Math.min(mapW - VIEW_W, camX));
-    camY = mapH <= VIEW_H ? (mapH - VIEW_H) / 2 : Math.max(0, Math.min(mapH - VIEW_H, camY));
-
-    const x0 = Math.floor(camX / TILE) - 1;
-    const y0 = Math.floor(camY / TILE) - 1;
-    for (let ty = y0; ty <= y0 + 12; ty++) {
-      for (let tx = x0; tx <= x0 + 17; tx++) {
-        this.drawTile(tx, ty, Math.round(tx * TILE - camX), Math.round(ty * TILE - camY));
-      }
-    }
-    for (const it of map.items) {
-      if (this.collectedItems.has(it.id)) continue;
-      const x = Math.round(it.x * TILE - camX);
-      const y = Math.round(it.y * TILE - camY);
-      ctx.fillStyle = '#e63946';
-      ctx.fillRect(x + 10, y + 12, 12, 10);
-      ctx.fillStyle = '#f1faee';
-      ctx.fillRect(x + 10, y + 17, 12, 5);
-      ctx.fillStyle = '#1a1c2c';
-      ctx.fillRect(x + 14, y + 15, 4, 4);
-    }
-    for (const npc of map.npcs) {
-      if (!this.npcVisible(npc)) continue;
-      const x = Math.round(npc.x * TILE - camX);
-      const y = Math.round(npc.y * TILE - camY);
-      drawSprite(ctx, PEOPLE[npc.spriteKey] ?? PEOPLE.villager1, x, y, 2, npc.facing === 'left');
-      if (npc.trainer && !this.defeatedTrainers.has(npc.trainer.id) && npc.trainer.sight > 0) {
-        text(ctx, '!', x + 16, y - 4, '#e63946', 14, true);
-      }
-    }
-    drawSprite(
-      ctx,
-      PEOPLE.player,
-      Math.round(playerPx - camX),
-      Math.round(playerPy - camY),
-      2,
-      this.facing === 'left',
-    );
-    // location banner + clock
-    panel(ctx, 6, 6, 150, 24);
-    text(ctx, map.name, 12, 22, '#ffffff', 12);
-    panel(ctx, VIEW_W - 86, 6, 80, 24);
-    text(ctx, formatTime(this.minute), VIEW_W - 46, 22, phaseFor(this.minute) === 'night' ? '#7fc8f8' : '#ffd93b', 12, true);
-  }
-
-  drawTile(tx: number, ty: number, x: number, y: number): void {
-    const ctx = this.ctx;
-    const ch = this.tileAt(tx, ty);
-    const indoor = this.map.indoor;
-    switch (ch) {
-      case '.': {
-        ctx.fillStyle = '#7ec850';
-        ctx.fillRect(x, y, TILE, TILE);
-        ctx.fillStyle = '#6db843';
-        if ((tx + ty) % 2 === 0) ctx.fillRect(x + 6, y + 6, 3, 3);
-        ctx.fillRect(x + 20, y + 22, 3, 3);
-        break;
-      }
-      case ',': {
-        ctx.fillStyle = '#d9c27e';
-        ctx.fillRect(x, y, TILE, TILE);
-        ctx.fillStyle = '#c9b26e';
-        ctx.fillRect(x + 4, y + 10, 4, 3);
-        ctx.fillRect(x + 22, y + 20, 4, 3);
-        break;
-      }
-      case 'G': {
-        ctx.fillStyle = '#4f9e3a';
-        ctx.fillRect(x, y, TILE, TILE);
-        ctx.fillStyle = '#3d7f2c';
-        for (let i = 0; i < 4; i++) {
-          ctx.fillRect(x + 3 + i * 8, y + 8, 3, 18);
-          ctx.fillRect(x + 5 + i * 8, y + 14, 3, 12);
-        }
-        break;
-      }
-      case 'T': {
-        ctx.fillStyle = '#7ec850';
-        ctx.fillRect(x, y, TILE, TILE);
-        ctx.fillStyle = '#5a4632';
-        ctx.fillRect(x + 12, y + 20, 8, 10);
-        ctx.fillStyle = '#2e7d3a';
-        ctx.fillRect(x + 2, y + 2, 28, 20);
-        ctx.fillStyle = '#3f9c4d';
-        ctx.fillRect(x + 5, y + 4, 10, 8);
-        break;
-      }
-      case 'W': {
-        ctx.fillStyle = '#4a9fd8';
-        ctx.fillRect(x, y, TILE, TILE);
-        ctx.fillStyle = '#7fc8f8';
-        const wave = Math.floor(this.frame / 30) % 2;
-        ctx.fillRect(x + 4 + wave * 4, y + 8, 12, 2);
-        ctx.fillRect(x + 14 - wave * 4, y + 22, 12, 2);
-        break;
-      }
-      case 'R': {
-        ctx.fillStyle = '#c0392b';
-        ctx.fillRect(x, y, TILE, TILE);
-        ctx.fillStyle = '#a03225';
-        ctx.fillRect(x, y + 12, TILE, 4);
-        ctx.fillRect(x, y + 26, TILE, 4);
-        break;
-      }
-      case 'B': {
-        ctx.fillStyle = '#e8dcc0';
-        ctx.fillRect(x, y, TILE, TILE);
-        ctx.fillStyle = '#87ceeb';
-        ctx.fillRect(x + 8, y + 8, 16, 12);
-        ctx.strokeStyle = '#b8ac90';
-        ctx.strokeRect(x + 8.5, y + 8.5, 15, 11);
-        break;
-      }
-      case 'D': {
-        ctx.fillStyle = '#e8dcc0';
-        ctx.fillRect(x, y, TILE, TILE);
-        ctx.fillStyle = '#8a5a2b';
-        ctx.fillRect(x + 6, y + 4, 20, 28);
-        ctx.fillStyle = '#ffd93b';
-        ctx.fillRect(x + 21, y + 18, 3, 3);
-        break;
-      }
-      case 'S': {
-        ctx.fillStyle = indoor ? '#d8cfc0' : '#7ec850';
-        ctx.fillRect(x, y, TILE, TILE);
-        ctx.fillStyle = '#5a4632';
-        ctx.fillRect(x + 14, y + 16, 4, 14);
-        ctx.fillStyle = '#8a6547';
-        ctx.fillRect(x + 4, y + 4, 24, 14);
-        break;
-      }
-      case 'w': {
-        ctx.fillStyle = '#8d99ae';
-        ctx.fillRect(x, y, TILE, TILE);
-        ctx.fillStyle = '#6e7a8e';
-        ctx.fillRect(x, y + 24, TILE, 8);
-        break;
-      }
-      case 'F': {
-        ctx.fillStyle = '#d8cfc0';
-        ctx.fillRect(x, y, TILE, TILE);
-        ctx.fillStyle = '#ccc2b0';
-        if ((tx + ty) % 2 === 0) ctx.fillRect(x, y, TILE, TILE);
-        break;
-      }
-      case 'C': {
-        ctx.fillStyle = '#d8cfc0';
-        ctx.fillRect(x, y, TILE, TILE);
-        ctx.fillStyle = '#a06a3a';
-        ctx.fillRect(x + 1, y + 6, 30, 24);
-        ctx.fillStyle = '#c08a4a';
-        ctx.fillRect(x + 1, y + 6, 30, 8);
-        break;
-      }
-      case 'M': {
-        ctx.fillStyle = '#d8cfc0';
-        ctx.fillRect(x, y, TILE, TILE);
-        ctx.fillStyle = '#6e7a8e';
-        ctx.fillRect(x + 2, y + 2, 28, 28);
-        ctx.fillStyle = '#8d99ae';
-        ctx.fillRect(x + 6, y + 6, 20, 20);
-        break;
-      }
-      case 'P': {
-        ctx.fillStyle = '#d8cfc0';
-        ctx.fillRect(x, y, TILE, TILE);
-        ctx.fillStyle = '#a06a3a';
-        ctx.fillRect(x, y + 8, TILE, 22);
-        if (!this.flags.starterChosen) {
-          ctx.fillStyle = '#e63946';
-          ctx.beginPath();
-          ctx.arc(x + 16, y + 16, 6, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.fillStyle = '#f1faee';
-          ctx.fillRect(x + 10, y + 16, 12, 4);
-        }
-        break;
-      }
-      case 'o': {
-        ctx.fillStyle = this.map.indoor ? '#d8cfc0' : '#7ec850';
-        ctx.fillRect(x, y, TILE, TILE);
-        ctx.fillStyle = '#8d8371';
-        ctx.beginPath();
-        ctx.arc(x + 16, y + 18, 11, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = '#a89e8c';
-        ctx.beginPath();
-        ctx.arc(x + 13, y + 14, 5, 0, Math.PI * 2);
-        ctx.fill();
-        break;
-      }
-      case SHALLOW_TILE: {
-        const open = !!this.flags[BADGE_FLAG_SHALLOW];
-        ctx.fillStyle = open ? '#5aa9e6' : '#3a7ca5';
-        ctx.fillRect(x, y, TILE, TILE);
-        ctx.fillStyle = '#a8dadc';
-        const bob = Math.sin((this.frame + tx * 9 + ty * 5) / 22) * 3;
-        ctx.fillRect(x + 3, y + 12 + bob, 12, 3);
-        ctx.fillRect(x + 18, y + 20 - bob, 11, 3);
-        break;
-      }
-      case 'x': {
-        const hot = this.lavaHot();
-        ctx.fillStyle = hot ? '#e2543a' : '#5a3a34';
-        ctx.fillRect(x, y, TILE, TILE);
-        ctx.fillStyle = hot ? '#ffd93b' : '#7a4a3a';
-        ctx.fillRect(x + 4, y + 6, 24, 6);
-        ctx.fillRect(x + 8, y + 20, 16, 5);
-        break;
-      }
-      case '#': {
-        ctx.fillStyle = this.map.indoor ? '#cfd8e0' : '#a8c8d8';
-        ctx.fillRect(x, y, TILE, TILE);
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 2;
-        const drift = (this.frame / 4 + tx * 6) % TILE;
-        ctx.beginPath();
-        ctx.moveTo(x + drift, y + 8);
-        ctx.lineTo(x + drift - 10, y + 8);
-        ctx.moveTo(x + drift, y + 22);
-        ctx.lineTo(x + drift - 14, y + 22);
-        ctx.stroke();
-        break;
-      }
-      case '_': {
-        ctx.fillStyle = '#3d3f52';
-        ctx.fillRect(x, y, TILE, TILE);
-        ctx.fillStyle = '#5a5f7a';
-        ctx.fillRect(x + 2, y + 2, 28, 28);
-        break;
-      }
-      default: {
-        ctx.fillStyle = '#1a1c2c';
-        ctx.fillRect(x, y, TILE, TILE);
-      }
-    }
-    this.renderTileOverlay(tx, ty, x, y);
-  }
-
-  renderTileOverlay(tx: number, ty: number, x: number, y: number): void {
-    const ctx = this.ctx;
-    const gate = this.gateAt(tx, ty);
-    if (gate && !this.gateOpen(gate)) {
-      ctx.fillStyle = '#8d99ae';
-      for (let i = 0; i < 4; i++) ctx.fillRect(x + 2 + i * 8, y, 4, TILE);
-      ctx.fillStyle = '#e63946';
-      ctx.fillRect(x + 12, y + 13, 8, 6);
-      return;
-    }
-    const button = this.map.buttons?.find((b) => b.x === tx && b.y === ty);
-    if (button) {
-      const on = !!this.flags[button.flag];
-      ctx.fillStyle = '#463f33';
-      ctx.fillRect(x + 6, y + 8, 20, 16);
-      ctx.fillStyle = on ? '#5ad25a' : '#e63946';
-      ctx.fillRect(x + 10, on ? y + 12 : y + 16, 12, 6);
-      return;
-    }
-    const pad = this.map.pads?.find((p) => p.x === tx && p.y === ty);
-    if (pad) {
-      const pulse = 6 + Math.sin(this.frame / 12) * 3;
-      ctx.fillStyle = '#7d3ac0';
-      ctx.beginPath();
-      ctx.arc(x + 16, y + 16, 12, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = '#d8a7ff';
-      ctx.beginPath();
-      ctx.arc(x + 16, y + 16, pulse, 0, Math.PI * 2);
-      ctx.fill();
-      return;
-    }
-    const one = this.map.oneWay?.find((o) => o.x === tx && o.y === ty);
-    if (one) {
-      ctx.fillStyle = '#f1faee';
-      const cx = x + 16;
-      const cy = y + 16;
-      const arrow: Record<string, [number, number][]> = {
-        up: [[cx, cy - 8], [cx - 7, cy + 6], [cx + 7, cy + 6]],
-        down: [[cx, cy + 8], [cx - 7, cy - 6], [cx + 7, cy - 6]],
-        left: [[cx - 8, cy], [cx + 6, cy - 7], [cx + 6, cy + 7]],
-        right: [[cx + 8, cy], [cx - 6, cy - 7], [cx - 6, cy + 7]],
-      };
-      const pts = arrow[one.dir];
-      ctx.beginPath();
-      ctx.moveTo(pts[0][0], pts[0][1]);
-      ctx.lineTo(pts[1][0], pts[1][1]);
-      ctx.lineTo(pts[2][0], pts[2][1]);
-      ctx.closePath();
-      ctx.fill();
-    }
-  }
-
-  renderDialogue(): void {
-    const ctx = this.ctx;
-    panel(ctx, 8, VIEW_H - 92, VIEW_W - 16, 84);
-    const page = this.dialogueQueue[0] ?? '';
-    const lines = wrap(page, 54);
-    lines.slice(0, 3).forEach((l, i) => text(ctx, l, 20, VIEW_H - 66 + i * 20, '#ffffff', 13));
-    if (Math.floor(this.frame / 30) % 2 === 0) text(ctx, '▼', VIEW_W - 30, VIEW_H - 18, '#ffd93b', 12);
-  }
-
-  renderMenu(): void {
-    const m = this.menu;
-    if (!m) return; // menu was cleared but mode hasn't transitioned yet
-    const ctx = this.ctx;
-    const h = 40 + m.items.length * 22 + (m.info ? m.info.length * 18 : 0);
-    const w = 260;
-    const x = VIEW_W / 2 - w / 2;
-    const y = Math.max(10, VIEW_H / 2 - h / 2);
-    panel(ctx, x, y, w, h);
-    text(ctx, m.title, x + 12, y + 22, '#ffd93b', 13);
-    m.items.forEach((it, i) => {
-      const sel = i === m.index;
-      text(ctx, (sel ? '> ' : '  ') + it, x + 14, y + 46 + i * 22, sel ? '#ffd93b' : '#ffffff', 13);
-    });
-    if (m.info) {
-      m.info.forEach((l, i) =>
-        text(ctx, l, x + 14, y + 46 + m.items.length * 22 + i * 18, '#8fa3c0', 11),
-      );
-    }
-  }
-
-  renderSummary(): void {
-    const ctx = this.ctx;
-    const m = this.summaryMon!;
-    const s = def(m);
-    ctx.fillStyle = '#29366f';
-    ctx.fillRect(0, 0, VIEW_W, VIEW_H);
-    if (m.isEgg) {
-      text(ctx, 'EGG', 240, 60, '#ffd93b', 24, true);
-      text(ctx, `It looks like it will hatch soon... (${m.hatchSteps ?? 0} steps left)`, 240, 120, '#c0cbdc', 12, true);
-      text(ctx, 'Watch over it as you walk!', 240, 150, '#8fa3c0', 12, true);
-      text(ctx, 'Press B to go back', 360, 310, '#8fa3c0', 10);
-      return;
-    }
-    drawSprite(ctx, MON_SPRITES[m.species], 30, 30, 6);
-    text(ctx, `${displayName(m)}  Lv${m.level}${m.gender ? (m.gender === 'M' ? ' \u2642' : ' \u2640') : ''}`, 160, 40, '#ffffff', 16);
-    s.types.forEach((t, i) => {
-      ctx.fillStyle = TYPE_COLORS[t];
-      ctx.fillRect(160 + i * 74, 50, 68, 18);
-      text(ctx, t, 194 + i * 74, 63, '#ffffff', 11, true);
-    });
-    text(ctx, `HP  ${m.hp}/${m.maxHp}`, 160, 92, '#ffffff', 12);
-    text(ctx, `ATK ${m.atk}   DEF ${m.def}`, 160, 112, '#ffffff', 12);
-    text(ctx, `SPA ${m.spa}   SPD ${m.spd}   SPE ${m.spe}`, 160, 132, '#ffffff', 12);
-    text(ctx, `EXP ${m.exp}  (next: ${expForLevel(growthOf(m), m.level + 1)})`, 160, 152, '#8fa3c0', 11);
-    const ability = ABILITIES[m.ability];
-    text(ctx, `Nature: ${m.nature}   Ability: ${ability?.name ?? m.ability}`, 160, 172, '#8fa3c0', 11);
-    text(ctx, `Item: ${m.heldItem ? itemName(m.heldItem) : 'none'}   Friendship: ${m.friendship}`, 160, 190, '#8fa3c0', 11);
-    text(ctx, 'MOVES', 30, 212, '#ffd93b', 13);
-    m.moves.forEach((ms, i) => {
-      const mv = MOVES[ms.id];
-      text(ctx, `${mv.name}  (${mv.type})  PP ${ms.pp}/${mv.pp}`, 30, 232 + i * 18, '#ffffff', 12);
-    });
-    text(ctx, wrap(s.dex, 60)[0] ?? '', 30, 310, '#c0cbdc', 10);
-    text(ctx, 'Press B to go back', 360, 310, '#8fa3c0', 10);
-  }
-
-  renderBattle(): void {
-    const ctx = this.ctx;
-    const b = this.battle!;
-    const g = ctx.createLinearGradient(0, 0, 0, VIEW_H);
-    g.addColorStop(0, '#8fd3f4');
-    g.addColorStop(1, '#b8e0a0');
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, VIEW_W, VIEW_H - 88);
-
-    // platforms
-    ctx.fillStyle = 'rgba(120,160,90,0.6)';
-    ctx.beginPath();
-    ctx.ellipse(360, 130, 80, 20, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.ellipse(110, 226, 90, 22, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    // weather/terrain indicator
-    if (b.weather || b.terrain) {
-      const label = [
-        b.weather ? { sun: 'Harsh Sun', rain: 'Rain', sand: 'Sandstorm' }[b.weather] : '',
-        b.terrain ? (b.terrain === 'electric' ? 'Electric Terrain' : 'Grassy Terrain') : '',
-      ]
-        .filter(Boolean)
-        .join(' + ');
-      panel(ctx, VIEW_W - 160, 12, 148, 22);
-      text(ctx, label, VIEW_W - 86, 27, '#ffd93b', 10, true);
-    }
-
-    // enemy
-    const enemy = b.enemy;
-    drawSprite(ctx, MON_SPRITES[enemy.species], 310, 40, 6);
-    panel(ctx, 10, 12, 200, 54);
-    text(ctx, `${displayName(enemy)}  Lv${enemy.level}`, 20, 30, '#ffffff', 12);
-    hpBar(ctx, 20, 40, 160, enemy.hp / enemy.maxHp);
-    if (enemy.status) text(ctx, enemy.status, 176, 60, '#e63946', 10);
-
-    // player
-    const mine = b.active;
-    drawSprite(ctx, MON_SPRITES[mine.species], 50, 140, 6, true);
-    panel(ctx, 260, 150, 210, 74);
-    text(ctx, `${displayName(mine)}  Lv${mine.level}`, 270, 168, '#ffffff', 12);
-    hpBar(ctx, 270, 178, 170, mine.hp / mine.maxHp);
-    text(ctx, `${mine.hp}/${mine.maxHp}`, 270, 202, '#ffffff', 11);
-    if (mine.status) text(ctx, mine.status, 420, 202, '#e63946', 10);
-    const expNow = mine.exp - expForLevel(growthOf(mine), mine.level);
-    const expNext = expForLevel(growthOf(mine), mine.level + 1) - expForLevel(growthOf(mine), mine.level);
-    ctx.fillStyle = '#29366f';
-    ctx.fillRect(270, 210, 170, 6);
-    ctx.fillStyle = '#4a9fd8';
-    ctx.fillRect(270, 210, 170 * Math.max(0, Math.min(1, expNow / expNext)), 6);
-
-    // message box
-    panel(ctx, 0, VIEW_H - 88, VIEW_W, 88);
-    if (this.battlePhase === 'msg') {
-      const msg = this.battleMsgs[0] ?? '';
-      wrap(msg, 54)
-        .slice(0, 3)
-        .forEach((l, i) => text(ctx, l, 16, VIEW_H - 60 + i * 20, '#ffffff', 13));
-      if (Math.floor(this.frame / 30) % 2 === 0)
-        text(ctx, '▼', VIEW_W - 26, VIEW_H - 14, '#ffd93b', 12);
-    } else if (this.battlePhase === 'action') {
-      text(ctx, `What will ${displayName(mine)} do?`, 16, VIEW_H - 50, '#ffffff', 13);
-      const grid = ['FIGHT', 'BAG', 'MOCKMON', 'RUN'];
-      grid.forEach((gLabel, i) => {
-        const gx = 250 + (i % 2) * 110;
-        const gy = VIEW_H - 60 + Math.floor(i / 2) * 30;
-        const sel = i === this.battleMenuIndex;
-        text(ctx, (sel ? '> ' : '  ') + gLabel, gx, gy, sel ? '#ffd93b' : '#ffffff', 13);
-      });
-    } else if (this.battlePhase === 'moves') {
-      const struggleOnly = b.active.moves.every((ms) => ms.pp <= 0);
-      if (struggleOnly) {
-        const sel = this.battleMenuIndex === 0;
-        text(ctx, `${sel ? '> ' : '  '}STRUGGLE`, 16, VIEW_H - 66, '#e63946', 12);
-        text(ctx, 'No PP left!', 250, VIEW_H - 66, '#8fa3c0', 11);
-      } else {
-        b.active.moves.forEach((ms, i) => {
-          const mv = MOVES[ms.id];
-          const sel = i === this.battleMenuIndex;
-          text(
-            ctx,
-            `${sel ? '> ' : '  '}${mv.name}`,
-            16,
-            VIEW_H - 66 + i * 19,
-            sel ? '#ffd93b' : ms.pp <= 0 ? '#8fa3c0' : '#ffffff',
-            12,
-          );
-          text(ctx, `${mv.type}  PP ${ms.pp}/${mv.pp}`, 250, VIEW_H - 66 + i * 19, '#8fa3c0', 11);
-        });
-      }
-    } else if (this.battlePhase === 'bag') {
-      const items = ['potion', 'superpotion', 'mockball'];
-      items.forEach((it, i) => {
-        const sel = i === this.battleMenuIndex;
-        text(
-          ctx,
-          `${sel ? '> ' : '  '}${itemName(it)} x${this.inventory[it] ?? 0}`,
-          16,
-          VIEW_H - 62 + i * 22,
-          sel ? '#ffd93b' : '#ffffff',
-          13,
-        );
-      });
-    } else if (this.battlePhase === 'party') {
-      this.party.forEach((m, i) => {
-        const sel = i === this.battleMenuIndex;
-        const label = m.isEgg
-          ? `EGG${i === b.activeIndex ? ' *' : ''}`
-          : `${displayName(m)} Lv${m.level} ${m.hp}/${m.maxHp}${m.hp <= 0 ? ' (FNT)' : ''}${i === b.activeIndex ? ' *' : ''}`;
-        text(ctx, (sel ? '> ' : '  ') + label, 16, VIEW_H - 70 + i * 14, sel ? '#ffd93b' : '#ffffff', 11);
-      });
-    }
-  }
-
-  renderEnding(): void {
-    const ctx = this.ctx;
-    const g = ctx.createLinearGradient(0, 0, 0, VIEW_H);
-    g.addColorStop(0, '#29366f');
-    g.addColorStop(1, '#5d275d');
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, VIEW_W, VIEW_H);
-    text(ctx, 'CONGRATULATIONS!', 240, 80, '#ffd93b', 24, true);
-    text(ctx, 'You are the Champion of the Mocca region!', 240, 120, '#ffffff', 14, true);
-    text(ctx, `Badges: ${this.badges.length}/8`, 240, 155, '#c0cbdc', 12, true);
-    text(ctx, `MockDex: seen ${this.seenSpecies.size}/${DEX_ORDER.length}, caught ${this.caughtSpecies.size}/${DEX_ORDER.length}`, 240, 175, '#c0cbdc', 12, true);
-    text(ctx, `Playtime: ${formatPlaytime(this.playFrames)}`, 240, 195, '#c0cbdc', 12, true);
-    text(ctx, 'Press Z/Enter for credits', 240, 290, '#8fa3c0', 11, true);
+    renderControlsBar(this);
   }
 }
-
 // ---------- drawing utils ----------
 
 function deltas(dir: Facing): [number, number] {
@@ -2566,4 +1965,3 @@ function deltas(dir: Facing): [number, number] {
       return [1, 0];
   }
 }
-

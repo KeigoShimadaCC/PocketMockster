@@ -30,6 +30,10 @@ const list: ItemDef[] = [
 ];
 
 export const ITEMS: Record<string, ItemDef> = Object.fromEntries(list.map((i) => [i.id, i]));
+
+export function itemName(id: string): string {
+  return ITEMS[id]?.name ?? id;
+}
 export const SHOP_STOCK = ['potion', 'superpotion', 'mockball', 'thunderstone', 'waterstone', 'moonstone', 'oranberry', 'sitrusberry'];
 
 // Marts restock as the badge count climbs; the base list stays first so prices stay predictable.

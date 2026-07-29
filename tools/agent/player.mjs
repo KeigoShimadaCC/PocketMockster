@@ -16,7 +16,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createCodexSession } from './codex-engine.mjs';
 import { createCursorSession, writeMcpConfig } from './cursor-engine.mjs';
-import { runTurnWithRetry } from './retry.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const PROFILES_PATH = path.join(REPO_ROOT, 'tools', 'agent', 'profiles.json');
@@ -64,17 +63,84 @@ const cfg = {
   runId: String(args['run-id'] ?? `${profileName}-${new Date().toISOString().replace(/[:.]/g, '-')}`),
   port: Number(args.port ?? 8787),
   vitePort: Number(args['vite-port'] ?? 5199),
+  pricing: profile.pricing ?? null,
 };
 
 const PM_URL = `http://localhost:${cfg.port}`;
+const API_RETRY_BACKOFF_MS = [500, 1000, 2000];
+const TURN_RETRY_BACKOFF_MS = 2000;
+const TURN_MAX_ATTEMPTS = 2;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableNetworkError(err) {
+  const msg = String(err?.message ?? err ?? '');
+  const code = err?.code ?? err?.cause?.code ?? '';
+  return (
+    err?.name === 'TypeError' ||
+    code === 'ECONNREFUSED' ||
+    code === 'ECONNRESET' ||
+    msg.includes('ECONNREFUSED') ||
+    msg.includes('ECONNRESET') ||
+    msg.toLowerCase().includes('fetch failed')
+  );
+}
+
+function isTransientEngineReason(value) {
+  return /resource[_ ]exhausted|retriable|rate.?limit|too many requests|overloaded|temporarily unavailable|\b(429|500|502|503|504)\b/i.test(
+    String(value ?? ''),
+  );
+}
 
 async function api(pathname, body) {
-  const res = await fetch(`${PM_URL}${pathname}`, {
-    method: body === undefined ? 'GET' : 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  return res.json();
+  let lastErr;
+  for (let attempt = 1; attempt <= API_RETRY_BACKOFF_MS.length + 1; attempt++) {
+    try {
+      const res = await fetch(`${PM_URL}${pathname}`, {
+        method: body === undefined ? 'GET' : 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      if (res.status >= 400 && res.status < 500) {
+        throw new Error(`pm-server ${pathname} failed with HTTP ${res.status}`);
+      }
+      if (res.status >= 500) {
+        throw Object.assign(new Error(`pm-server ${pathname} failed with HTTP ${res.status}`), { retryable: true });
+      }
+      return res.json();
+    } catch (err) {
+      const retryable = err?.retryable === true || isRetryableNetworkError(err);
+      if (!retryable || attempt > API_RETRY_BACKOFF_MS.length) throw err;
+      lastErr = err;
+      await sleep(API_RETRY_BACKOFF_MS[attempt - 1]);
+    }
+  }
+  throw lastErr ?? new Error(`api request failed for ${pathname}`);
+}
+
+async function runTurnWithTransientRetry(engine, prompt, deadline, onRetry) {
+  for (let attempt = 1; attempt <= TURN_MAX_ATTEMPTS; attempt++) {
+    try {
+      const result = await engine.turn(prompt);
+      if (!result?.isError) return { ok: true, result };
+      if (!isTransientEngineReason(result.text)) return { ok: true, result };
+      if (attempt >= TURN_MAX_ATTEMPTS || Date.now() + TURN_RETRY_BACKOFF_MS > deadline) {
+        return { ok: false, error: new Error(result.text || 'transient engine result error') };
+      }
+      await onRetry(new Error(result.text || 'transient engine result error'), attempt, TURN_RETRY_BACKOFF_MS, TURN_MAX_ATTEMPTS);
+      await sleep(TURN_RETRY_BACKOFF_MS);
+    } catch (err) {
+      if (!isTransientEngineReason(err)) throw err;
+      if (attempt >= TURN_MAX_ATTEMPTS || Date.now() + TURN_RETRY_BACKOFF_MS > deadline) {
+        return { ok: false, error: err };
+      }
+      await onRetry(err, attempt, TURN_RETRY_BACKOFF_MS, TURN_MAX_ATTEMPTS);
+      await sleep(TURN_RETRY_BACKOFF_MS);
+    }
+  }
+  return { ok: false, error: new Error('turn failed after retries') };
 }
 
 async function waitHealth(timeoutMs = 90000) {
@@ -291,6 +357,7 @@ async function main() {
       '--goal', cfg.goal,
       '--model', cfg.model,
       '--effort', cfg.effort,
+      ...(cfg.pricing && typeof cfg.pricing === 'object' ? ['--pricing', JSON.stringify(cfg.pricing)] : []),
       ...(cfg.headless ? ['--headless'] : []),
       ...(cfg.build ? ['--build'] : []),
     ],
@@ -369,6 +436,7 @@ async function main() {
 
   const deadline = Date.now() + cfg.maxMinutes * 60_000;
   let status = 'max-turns';
+  let consecutiveTurnFailures = 0;
 
   const deadlineTimer = setInterval(() => {
     if (Date.now() > deadline && !finalized) {
@@ -383,7 +451,21 @@ async function main() {
     for (let turn = 0; turn < cfg.maxTurns; turn++) {
       console.log(`\n[player] === turn ${turn + 1}/${cfg.maxTurns} ===`);
       turnFinalMessage = '';
-      const result = await runTurnWithRetry(engine, prompt, { deadline, onRetry });
+      const turnAttempt = await runTurnWithTransientRetry(engine, prompt, deadline, onRetry);
+      if (!turnAttempt.ok) {
+        consecutiveTurnFailures++;
+        const detail = String(turnAttempt.error?.message ?? turnAttempt.error ?? 'transient engine failure').slice(0, 300);
+        console.error(`\x1b[31m[player]\x1b[0m turn failed (${consecutiveTurnFailures} consecutive): ${detail}`);
+        await api('/api/log-event', { type: 'agent_error', message: `turn failed (${consecutiveTurnFailures} consecutive): ${detail}` }).catch(() => {});
+        if (consecutiveTurnFailures >= 3) {
+          status = 'error';
+          lastAgentText = `aborting after ${consecutiveTurnFailures} consecutive failed turns: ${detail}\n\nLast agent message:\n${lastAgentText}`;
+          break;
+        }
+        continue;
+      }
+      consecutiveTurnFailures = 0;
+      const result = turnAttempt.result;
       lastAgentText = turnFinalMessage || result.text || lastAgentText;
       console.log(`[player] turn tokens: in=${result.usage.input_tokens ?? '?'} out=${result.usage.output_tokens ?? '?'}`);
 

@@ -22,7 +22,10 @@ async function call(pathname, body) {
 }
 
 function textResult(obj) {
-  return { content: [{ type: 'text', text: JSON.stringify(obj, null, 1) }] };
+  return {
+    content: [{ type: 'text', text: JSON.stringify(obj, null, 1) }],
+    structuredContent: obj && typeof obj === 'object' ? obj : { value: obj },
+  };
 }
 
 const server = new McpServer({ name: 'pocketmockster', version: '1.0.0' });

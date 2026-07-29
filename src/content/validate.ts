@@ -1,8 +1,11 @@
 import { ITEMS } from '../data/items';
 import { SPECIES } from '../data/species';
+import type { ScriptCmd } from '../script';
 import { PEOPLE } from '../sprites';
 import { MAPS } from './maps';
+import { QUESTS } from './quests';
 import { SCRIPTS } from './scripts';
+import { TRAINERS } from './trainers';
 import { SHALLOW_TILE, SOLID_TILES, type GameMap } from './types';
 
 export const KNOWN_TILES = new Set([
@@ -10,12 +13,55 @@ export const KNOWN_TILES = new Set([
   SHALLOW_TILE, 'x', '#', '_',
 ]);
 const BASE_INVENTORY_ITEM_IDS = new Set(['mockball', 'potion', 'superpotion']);
-const KNOWN_ITEM_IDS = new Set([...Object.keys(ITEMS), ...BASE_INVENTORY_ITEM_IDS]);
+const RUNTIME_GENERATED_FLAG_EXACT = new Set([
+  'gymDone',
+  'starterChosen',
+  'rivalBeaten',
+  'gotBalls',
+  'hikerTraded',
+  'leagueOpen',
+  'championBeaten',
+  'postGame',
+  'nibbitFound',
+  'elite1Beaten',
+  'elite2Beaten',
+  'elite3Beaten',
+  'elite4Beaten',
+  'championOpen',
+  'nilBeaten',
+  'patchBeaten',
+  'mergeBeaten',
+]);
+const DOCUMENTED_NON_NPC_GIVERS = new Set([
+  'prof_maple',
+  'route1_hiker',
+  'contest_clerk',
+  'museum_curator',
+  'lighthouse_keeper',
+  'zephyr_courier',
+]);
 
 export interface ContentIssue {
   severity: 'error' | 'warn';
   where: string;
   message: string;
+}
+
+export interface ValidationSources {
+  scripts?: Record<string, ScriptCmd[]>;
+  trainers?: Record<string, unknown>;
+  quests?: Record<
+    string,
+    {
+      id: string;
+      giver?: string;
+      stages: { id: string }[];
+      reward?: { item?: string; mon?: { species: string; level: number } };
+    }
+  >;
+  items?: Record<string, unknown>;
+  species?: Record<string, unknown>;
+  people?: Record<string, unknown>;
 }
 
 function inBounds(map: GameMap, x: number, y: number): boolean {
@@ -28,11 +74,74 @@ function tileAt(map: GameMap, x: number, y: number): string {
   return map.tiles[y]?.[x] ?? '';
 }
 
-export function validateMaps(maps: Record<string, GameMap> = MAPS): ContentIssue[] {
+function addIssue(
+  issues: ContentIssue[],
+  severity: ContentIssue['severity'],
+  where: string,
+  message: string,
+): void {
+  issues.push({ severity, where, message });
+}
+
+function addFlagUsage(store: Map<string, string>, flag: string, where: string): void {
+  if (!flag.trim()) return;
+  if (!store.has(flag)) store.set(flag, where);
+}
+
+function isRuntimeGeneratedFlag(flag: string): boolean {
+  if (RUNTIME_GENERATED_FLAG_EXACT.has(flag)) return true;
+  if (flag.startsWith('badge_')) return true;
+  if (flag.startsWith('starter_')) return true;
+  return /^gym\d+Done$/.test(flag);
+}
+
+function walkScriptCommands(
+  cmds: ScriptCmd[],
+  where: string,
+  onVisit: (cmd: ScriptCmd, where: string) => void,
+): void {
+  for (let i = 0; i < cmds.length; i++) {
+    const cmd = cmds[i];
+    const cmdWhere = `${where}[${i}]`;
+    onVisit(cmd, cmdWhere);
+    switch (cmd.t) {
+      case 'choice':
+        for (let optionIndex = 0; optionIndex < cmd.options.length; optionIndex++) {
+          const option = cmd.options[optionIndex];
+          walkScriptCommands(option.then, `${cmdWhere}:option[${optionIndex}]`, onVisit);
+        }
+        if (cmd.onCancel) walkScriptCommands(cmd.onCancel, `${cmdWhere}:onCancel`, onVisit);
+        break;
+      case 'if':
+      case 'ifHasItem':
+      case 'ifQuest':
+        walkScriptCommands(cmd.then, `${cmdWhere}:then`, onVisit);
+        if (cmd.else) walkScriptCommands(cmd.else, `${cmdWhere}:else`, onVisit);
+        break;
+      case 'battle':
+        if (cmd.onWin) walkScriptCommands(cmd.onWin, `${cmdWhere}:onWin`, onVisit);
+        if (cmd.onLose) walkScriptCommands(cmd.onLose, `${cmdWhere}:onLose`, onVisit);
+        break;
+      default:
+        break;
+    }
+  }
+}
+
+export function validateMaps(maps: Record<string, GameMap> = MAPS, sources: ValidationSources = {}): ContentIssue[] {
   const issues: ContentIssue[] = [];
+  const scripts = sources.scripts ?? SCRIPTS;
+  const trainers = sources.trainers ?? TRAINERS;
+  const quests = sources.quests ?? QUESTS;
+  const items = sources.items ?? ITEMS;
+  const species = sources.species ?? SPECIES;
+  const people = sources.people ?? PEOPLE;
+  const knownItemIds = new Set([...Object.keys(items), ...BASE_INVENTORY_ITEM_IDS]);
   const npcIds = new Map<string, string>();
   const trainerIds = new Map<string, string>();
   const itemIds = new Map<string, string>();
+  const setFlags = new Map<string, string>();
+  const readFlags = new Map<string, string>();
 
   for (const solidTile of SOLID_TILES) {
     if (!KNOWN_TILES.has(solidTile)) {
@@ -147,13 +256,15 @@ export function validateMaps(maps: Record<string, GameMap> = MAPS): ContentIssue
         npcIds.set(npc.id, npcWhere);
       }
 
-      if (!PEOPLE[npc.spriteKey]) {
+      if (!people[npc.spriteKey]) {
         issues.push({
           severity: 'error',
           where: npcWhere,
           message: `Unknown NPC spriteKey '${npc.spriteKey}'`,
         });
       }
+      if (npc.hiddenUntilFlag) addFlagUsage(readFlags, npc.hiddenUntilFlag, `${npcWhere}:hiddenUntilFlag`);
+      if (npc.hiddenAfterFlag) addFlagUsage(readFlags, npc.hiddenAfterFlag, `${npcWhere}:hiddenAfterFlag`);
 
       const trainer = npc.trainer;
       if (!trainer) continue;
@@ -177,7 +288,7 @@ export function validateMaps(maps: Record<string, GameMap> = MAPS): ContentIssue
         });
       }
       for (const partyMon of trainer.party) {
-        if (!SPECIES[partyMon.species]) {
+        if (!species[partyMon.species]) {
           issues.push({
             severity: 'error',
             where: trainerWhere,
@@ -230,7 +341,7 @@ export function validateMaps(maps: Record<string, GameMap> = MAPS): ContentIssue
         itemIds.set(item.id, itemWhere);
       }
 
-      if (!KNOWN_ITEM_IDS.has(item.item)) {
+      if (!knownItemIds.has(item.item)) {
         issues.push({
           severity: 'error',
           where: itemWhere,
@@ -263,7 +374,7 @@ export function validateMaps(maps: Record<string, GameMap> = MAPS): ContentIssue
 
     for (const encounter of map.encounters) {
       const encounterWhere = `map:${mapKey}:encounter:${encounter.species}`;
-      if (!SPECIES[encounter.species]) {
+      if (!species[encounter.species]) {
         issues.push({
           severity: 'error',
           where: encounterWhere,
@@ -334,7 +445,9 @@ export function validateMaps(maps: Record<string, GameMap> = MAPS): ContentIssue
     }
 
     const gateFlags = new Set((map.gates ?? []).map((g) => g.flag));
+    for (const gate of map.gates ?? []) addFlagUsage(readFlags, gate.flag, `map:${mapKey}:gate(${gate.x},${gate.y})`);
     for (const button of map.buttons ?? []) {
+      addFlagUsage(setFlags, button.flag, `map:${mapKey}:button(${button.x},${button.y})`);
       if (!gateFlags.has(button.flag) && !button.text) {
         issues.push({
           severity: 'warn',
@@ -369,7 +482,7 @@ export function validateMaps(maps: Record<string, GameMap> = MAPS): ContentIssue
     }
 
     for (const npc of map.npcs) {
-      if (npc.script && !SCRIPTS[npc.script]) {
+      if (npc.script && !scripts[npc.script]) {
         issues.push({
           severity: 'error',
           where: `map:${mapKey}:npc:${npc.id}`,
@@ -379,9 +492,10 @@ export function validateMaps(maps: Record<string, GameMap> = MAPS): ContentIssue
     }
     for (const event of [...(map.events ?? []), ...(map.onEnter ? [map.onEnter] : [])]) {
       const where = `map:${mapKey}:event(${event.x},${event.y})`;
-      if (!SCRIPTS[event.script]) {
+      if (!scripts[event.script]) {
         issues.push({ severity: 'error', where, message: `Event references unknown script '${event.script}'` });
       }
+      if (event.once) addFlagUsage(setFlags, event.once, `${where}:once`);
       if (map.events?.includes(event) && !inBounds(map, event.x, event.y)) {
         issues.push({ severity: 'error', where, message: 'Event position is out of bounds' });
       }
@@ -402,6 +516,128 @@ export function validateMaps(maps: Record<string, GameMap> = MAPS): ContentIssue
         message: "Map has 'G' tiles but encounter table is empty",
       });
     }
+  }
+
+  const questById = new Map(Object.values(quests).map((quest) => [quest.id, quest]));
+
+  for (const [scriptId, cmds] of Object.entries(scripts)) {
+    walkScriptCommands(cmds, `script:${scriptId}`, (cmd, where) => {
+      switch (cmd.t) {
+        case 'battle':
+          if (!trainers[cmd.trainer]) {
+            addIssue(issues, 'error', where, `Unknown battle trainer '${cmd.trainer}'`);
+          }
+          break;
+        case 'giveMon':
+          if (!species[cmd.species]) {
+            addIssue(issues, 'error', where, `Unknown species '${cmd.species}' in giveMon`);
+          }
+          if (cmd.level < 1 || cmd.level > 100) {
+            addIssue(issues, 'error', where, `giveMon level ${cmd.level} is outside 1..100`);
+          }
+          break;
+        case 'giveEgg':
+          if (!species[cmd.species]) {
+            addIssue(issues, 'error', where, `Unknown species '${cmd.species}' in giveEgg`);
+          }
+          break;
+        case 'giveItem':
+        case 'takeItem':
+          if (!knownItemIds.has(cmd.item)) {
+            addIssue(issues, 'error', where, `Unknown item '${cmd.item}' in ${cmd.t}`);
+          }
+          break;
+        case 'shop':
+          for (const itemId of cmd.stock ?? []) {
+            if (!knownItemIds.has(itemId)) {
+              addIssue(issues, 'error', where, `Unknown shop stock item '${itemId}'`);
+            }
+          }
+          break;
+        case 'warp': {
+          const map = maps[cmd.map];
+          if (!map) {
+            addIssue(issues, 'error', where, `Unknown warp target map '${cmd.map}'`);
+            break;
+          }
+          if (!inBounds(map, cmd.x, cmd.y)) {
+            addIssue(issues, 'error', where, `Warp destination (${cmd.x},${cmd.y}) is out of bounds in map '${cmd.map}'`);
+            break;
+          }
+          const tile = tileAt(map, cmd.x, cmd.y);
+          if (SOLID_TILES.has(tile)) {
+            addIssue(issues, 'error', where, `Warp destination (${cmd.x},${cmd.y}) in map '${cmd.map}' is on solid tile '${tile}'`);
+          }
+          break;
+        }
+        case 'questStart':
+        case 'questComplete':
+        case 'questAdvance':
+        case 'ifQuest': {
+          const quest = questById.get(cmd.quest);
+          if (!quest) {
+            addIssue(issues, 'error', where, `Unknown quest '${cmd.quest}' in ${cmd.t}`);
+            break;
+          }
+          if (
+            (cmd.t === 'ifQuest' || cmd.t === 'questAdvance') &&
+            cmd.stage !== undefined &&
+            !quest.stages.some((stage) => stage.id === cmd.stage)
+          ) {
+            addIssue(issues, 'error', where, `Unknown stage '${cmd.stage}' for quest '${cmd.quest}' in ${cmd.t}`);
+          }
+          break;
+        }
+        case 'setFlag':
+          addFlagUsage(setFlags, cmd.flag, where);
+          break;
+        case 'if':
+          addFlagUsage(readFlags, cmd.flag, where);
+          break;
+        default:
+          break;
+      }
+    });
+  }
+
+  for (const quest of Object.values(quests)) {
+    if (quest.giver && !npcIds.has(quest.giver) && !DOCUMENTED_NON_NPC_GIVERS.has(quest.giver)) {
+      addIssue(
+        issues,
+        'warn',
+        `quest:${quest.id}:giver`,
+        `Quest giver '${quest.giver}' does not match any NPC id`,
+      );
+    }
+
+    const reward = quest.reward;
+    if (!reward) continue;
+    if (reward.item && !knownItemIds.has(reward.item)) {
+      addIssue(issues, 'error', `quest:${quest.id}:reward`, `Unknown reward item '${reward.item}'`);
+    }
+    if (reward.mon) {
+      if (!species[reward.mon.species]) {
+        addIssue(
+          issues,
+          'error',
+          `quest:${quest.id}:reward`,
+          `Unknown reward mon species '${reward.mon.species}'`,
+        );
+      }
+      if (reward.mon.level < 1 || reward.mon.level > 100) {
+        addIssue(
+          issues,
+          'error',
+          `quest:${quest.id}:reward`,
+          `Reward mon level ${reward.mon.level} is outside 1..100`,
+        );
+      }
+    }
+  }
+
+  for (const [flag, where] of readFlags) {
+    if (setFlags.has(flag) || isRuntimeGeneratedFlag(flag)) continue;
+    addIssue(issues, 'warn', where, `Flag '${flag}' is read but never set by scripts, map buttons, or events`);
   }
 
   if (!maps.mapletown) {

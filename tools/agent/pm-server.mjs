@@ -16,7 +16,8 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from '@playwright/test';
 import { renderFindingsIndexMd } from './findings-index.mjs';
 
-const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const AGENT_DIR = path.dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = path.resolve(AGENT_DIR, '../..');
 
 // ---------- args ----------
 function parseArgs(argv) {
@@ -144,7 +145,7 @@ let viteProc = null;
 let browser = null;
 let page = null;
 let speed = RUN_META.speed;
-let lastPosKey = null;
+let lastStuckFingerprint = null;
 let expectReload = false;
 let cleared = false;
 let samePosStreak = 0;
@@ -222,19 +223,39 @@ const CATEGORIES = [
 // wrong repo area, so it is a required field rather than a guess.
 const AREAS = ['game', 'harness', 'docs', 'environment'];
 
-// Per-million-token pricing (input, cached_input, output) in USD.
-// Cached rate is 10% of input for OpenAI models; estimated for Cursor.
-// Source: OpenAI pricing page July 2026, Cursor docs May 2026.
-const MODEL_PRICING = {
-  'gpt-5.6-sol':      { input: 5.00,  cached: 0.50,  output: 30.00 },
-  'gpt-5.5':          { input: 5.00,  cached: 0.50,  output: 30.00 },
-  'gpt-5.4':          { input: 2.50,  cached: 0.25,  output: 15.00 },
-  'gpt-5.4-mini':     { input: 0.75,  cached: 0.075, output: 4.50 },
-  'gpt-5.4-nano':     { input: 0.20,  cached: 0.02,  output: 1.25 },
-  'gpt-5.6-terra':    { input: 2.50,  cached: 0.25,  output: 15.00 },
-  'gpt-5.6-luna':     { input: 1.00,  cached: 0.10,  output: 6.00 },
-  'composer-2.5':     { input: 0.50,  cached: 0.05,  output: 2.50 },
-};
+function normalizePricingTable(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
+  const out = {};
+  for (const [model, rates] of Object.entries(input)) {
+    if (!rates || typeof rates !== 'object') continue;
+    const inRate = Number(rates.input);
+    const cachedRate = Number(rates.cached);
+    const outRate = Number(rates.output);
+    if (!Number.isFinite(inRate) || !Number.isFinite(cachedRate) || !Number.isFinite(outRate)) continue;
+    out[model] = { input: inRate, cached: cachedRate, output: outRate };
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+function loadDefaultPricing() {
+  const pricingPath = path.join(AGENT_DIR, 'pricing.json');
+  const parsed = JSON.parse(fs.readFileSync(pricingPath, 'utf8'));
+  const normalized = normalizePricingTable(parsed);
+  if (!normalized) throw new Error(`invalid pricing table in ${pricingPath}`);
+  return normalized;
+}
+
+function parsePricingOverride(raw) {
+  if (!raw) return null;
+  try {
+    return normalizePricingTable(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+
+const DEFAULT_MODEL_PRICING = loadDefaultPricing();
+const MODEL_PRICING = parsePricingOverride(args.pricing) ?? DEFAULT_MODEL_PRICING;
 
 function computeCost(usage, model) {
   if (!usage || !model) return null;
@@ -532,14 +553,32 @@ async function updateOverlay() {
 }
 
 function trackStuck(s, actionDesc) {
-  const key = `${s.mode}:${s.map}:${s.x},${s.y}`;
-  if (key === lastPosKey) {
+  const menuPath = Array.isArray(s.menu?.indexPath)
+    ? s.menu.indexPath.join('>')
+    : Array.isArray(s.menu?.path)
+      ? s.menu.path.join('>')
+      : s.menu?.path ?? s.menu?.indexPath ?? s.menu?.index ?? '';
+  const normalizedDialogue = String(s.dialogue ?? '').replace(/\s+/g, ' ').trim().slice(0, 220);
+  const normalizedBattleMessage = String(s.battle?.message ?? '').replace(/\s+/g, ' ').trim().slice(0, 220);
+  const hpSum = (s.party ?? []).reduce((sum, mon) => sum + Math.max(0, Number(mon.hp ?? 0)), 0);
+  const key = [
+    s.mode,
+    s.map,
+    `${s.x},${s.y}`,
+    `menu:${s.menu?.title ?? ''}:${menuPath}`,
+    `dialogue:${normalizedDialogue}`,
+    `battle:${s.battle?.phase ?? ''}:${normalizedBattleMessage}`,
+    `hp:${hpSum}`,
+    `money:${s.money ?? 0}`,
+    `badges:${Array.isArray(s.badges) ? s.badges.length : 0}`,
+  ].join('|');
+  if (key === lastStuckFingerprint) {
     samePosStreak++;
   } else {
     samePosStreak = 0;
     stuckWarned = false;
   }
-  lastPosKey = key;
+  lastStuckFingerprint = key;
   if (samePosStreak >= 12 && !stuckWarned) {
     stuckWarned = true;
     stats.warnings++;
@@ -1085,6 +1124,13 @@ function updateFindingsIndex() {
 
 // ---------- report ----------
 function buildReport(status, summary, usage) {
+  const cost = computeCost(usage, RUN_META.model);
+  const unknownModelPricing = !!usage && !!RUN_META.model && !cost;
+  if (unknownModelPricing && !events.some((e) => e.type === 'warning' && e.kind === 'unknown-model-pricing' && e.model === RUN_META.model)) {
+    stats.warnings++;
+    logEvent('warning', { kind: 'unknown-model-pricing', model: RUN_META.model });
+  }
+
   const endedAt = new Date().toISOString();
   const durationMs = Date.parse(endedAt) - Date.parse(RUN_META.startedAt);
   const anomalies = events.filter((e) => e.type === 'anomaly');
@@ -1105,7 +1151,7 @@ function buildReport(status, summary, usage) {
     stats,
     outsideToolCalls: outsideTools.slice(0, 40),
     usage: usage ?? null,
-    cost: computeCost(usage, RUN_META.model),
+    cost,
     summary: summary ?? null,
     milestones,
     anomalies,
@@ -1129,6 +1175,7 @@ function buildReport(status, summary, usage) {
   lines.push(`- duration: ${(durationMs / 1000).toFixed(1)}s | tool calls: ${toolResults.length} | keys: ${stats.keysPressed} | tiles: ${stats.tilesWalked} | battles: ${stats.battlesRun}`);
   if (usage) lines.push(`- tokens: in ${usage.input_tokens ?? '?'} (cached ${usage.cached_input_tokens ?? 0}) / out ${usage.output_tokens ?? '?'}`);
   if (report.cost) lines.push(`- cost: $${report.cost.total.toFixed(2)} (input $${report.cost.inputCost.toFixed(2)} + cached $${report.cost.cachedCost.toFixed(2)} + output $${report.cost.outputCost.toFixed(2)})`);
+  else if (unknownModelPricing) lines.push('- cost: unknown (model not in pricing table)');
   if (outsideTools.length) {
     lines.push(
       '',

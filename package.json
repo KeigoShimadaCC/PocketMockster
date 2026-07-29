@@ -13,7 +13,8 @@
     "lint": "eslint .",
     "agent:server": "node tools/agent/pm-server.mjs",
     "agent:play": "node tools/agent/player.mjs",
-    "validate:content": "tsx tools/validate-content.ts"
+    "validate:content": "tsx tools/validate-content.ts",
+    "gen:sprites": "tsx tools/gen-sprites.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
