@@ -229,7 +229,8 @@ test('findings: validation, evidence capture, dedupe, and auto-detection', async
 
 // Regression: battle state must expose move name/category/power so the
 // battle loop can prefer damaging moves over status moves (Growl spam fix).
-test('battle state exposes move details (name, category, power)', async () => {
+// Also verifies move type is exposed (needed for manual mode type effectiveness).
+test('battle state exposes move details (name, type, category, power)', async () => {
   test.setTimeout(120_000);
   await api('/api/debug', { action: 'warp', args: ['route1', 4, 3] });
   for (let i = 0; i < 80; i++) {
@@ -243,14 +244,34 @@ test('battle state exposes move details (name, category, power)', async () => {
   for (const m of moves) {
     expect(typeof m.id).toBe('string');
     expect(typeof m.name).toBe('string');
+    expect(typeof m.type).toBe('string');
     expect(['physical', 'special', 'status']).toContain(m.category);
     expect(typeof m.power).toBe('number');
   }
   // At least one damaging move should exist
   expect(moves.some((m: any) => m.category !== 'status')).toBe(true);
+  // stateSummary battle field should be an object with move strings including type
+  expect(s.state.battle).toBeTruthy();
+  expect(typeof s.state.battle).toBe('object');
+  expect(s.state.battle.active.moves.length).toBeGreaterThan(0);
   // Run the battle to completion so the next test starts from a clean state
   await api('/api/battle', { maxTurns: 30 });
   await api('/api/wait', { mode: 'overworld', timeoutMs: 10_000 });
+});
+
+// Regression: state must include nearbyTiles (5x5 grid around player)
+// so the agent can see its surroundings without a separate pm_map call.
+test('state includes nearbyTiles grid', async () => {
+  test.setTimeout(60_000);
+  const s = await api('/api/state');
+  expect(s.raw.nearbyTiles).toBeTruthy();
+  expect(Array.isArray(s.raw.nearbyTiles)).toBe(true);
+  expect(s.raw.nearbyTiles.length).toBe(5); // 5x5 grid
+  expect(s.raw.nearbyTiles[0].length).toBe(5);
+  // Center tile should be the player's tile (floor or similar, not '#')
+  const center = s.raw.nearbyTiles[2][2];
+  expect(typeof center).toBe('string');
+  expect(center).not.toBe('#');
 });
 
 // Regression: grind must stay on the starting map and not wander through

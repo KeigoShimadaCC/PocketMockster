@@ -17,6 +17,27 @@ if (seedParam) setSeed(parseInt(seedParam, 10));
 
 initInput();
 const game = new Game(ctx);
+
+// Returns a small tile window around the player for agent screen state.
+function nearbyTilesGrid(g: Game): string[][] | null {
+  const tiles = g.map.tiles;
+  const h = tiles.length;
+  const w = tiles[0].length;
+  const r = 2; // 5x5 grid
+  const out: string[][] = [];
+  for (let dy = -r; dy <= r; dy++) {
+    const row: string[] = [];
+    for (let dx = -r; dx <= r; dx++) {
+      const x = g.px + dx;
+      const y = g.py + dy;
+      if (y < 0 || y >= h || x < 0 || x >= w) row.push('#');
+      else row.push(tiles[y][x]);
+    }
+    out.push(row);
+  }
+  return out;
+}
+
 if (params.get('noenc') === '1') game.noEncounters = true;
 if (!introSeen() && !params.get('noenc')) game.playIntro();
 
@@ -111,7 +132,9 @@ window.__PM = {
               moves: game.battle.active.moves.map((ms) => ({
                 id: ms.id,
                 name: MOVES[ms.id]?.name ?? ms.id,
+                type: MOVES[ms.id]?.type ?? 'Normal',
                 pp: ms.pp,
+                maxPp: MOVES[ms.id]?.pp ?? 0,
                 category: MOVES[ms.id]?.category ?? 'physical',
                 power: MOVES[ms.id]?.power ?? 0,
               })),
@@ -129,6 +152,7 @@ window.__PM = {
       caught: game.caughtSpecies.size,
       defeated: [...game.defeatedTrainers],
       endingShown: game.endingShown,
+      nearbyTiles: nearbyTilesGrid(game),
     };
   },
   debug: {

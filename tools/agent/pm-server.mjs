@@ -157,22 +157,40 @@ const stats = {
 
 function stateSummary(s) {
   if (!s) return null;
+  const party = s.party.map((m) => {
+    const p = `${m.species} L${m.level} ${m.hp}/${m.maxHp}`;
+    return m.status ? `${p} (${m.status})` : p;
+  });
   return {
     mode: s.mode,
     map: s.map,
     x: s.x,
     y: s.y,
+    facing: s.facing,
     money: s.money,
     badges: s.badges,
     objective: s.objective ?? null,
-    party: s.party.map((m) => `${m.species} L${m.level} ${m.hp}/${m.maxHp}`),
+    party,
     storage: s.storageCount,
     inventory: Object.fromEntries(Object.entries(s.inventory ?? {}).filter(([, n]) => n > 0)),
     healPoint: s.healPoint ? `${s.healPoint.map} (${s.healPoint.x},${s.healPoint.y})` : null,
-    menu: s.menu ? `${s.menu.title} [${s.menu.index}]` : null,
-    dialogue: s.dialogue ? s.dialogue.slice(0, 90) : null,
+    menu: s.menu ? { title: s.menu.title, items: s.menu.items, index: s.menu.index, info: s.menu.info ?? null } : null,
+    dialogue: s.dialogue ? s.dialogue.slice(0, 120) : null,
+    nearbyTiles: s.nearbyTiles ?? null,
     battle: s.battle
-      ? `${s.battle.phase} vs ${s.battle.enemy.species} L${s.battle.enemy.level} (${s.battle.enemy.hp}/${s.battle.enemy.maxHp})`
+      ? {
+          phase: s.battle.phase,
+          menuIndex: s.battle.menuIndex,
+          message: s.battle.message,
+          outcome: s.battle.outcome,
+          isTrainer: s.battle.isTrainer,
+          enemy: { species: s.battle.enemy.species, level: s.battle.enemy.level, hp: s.battle.enemy.hp, maxHp: s.battle.enemy.maxHp },
+          active: {
+            species: s.battle.active.species,
+            hp: s.battle.active.hp,
+            moves: s.battle.active.moves.map((mv) => `${mv.name} (${mv.type}/${mv.category} ${mv.power}dmg ${mv.pp}/${mv.maxPp}pp)`),
+          },
+        }
       : null,
     seen: s.seen,
     caught: s.caught,
@@ -1342,6 +1360,7 @@ const server = http.createServer(async (req, res) => {
         runDir: RUN_DIR,
         cleared,
         digest: lastStatus ? stateSummary(lastStatus) : null,
+        recentActions: reproTrail(8),
         milestones: events.filter((e) => e.type === 'milestone').slice(-8),
         findings: findings.map((f) => ({
           index: f.index,

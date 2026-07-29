@@ -99,12 +99,10 @@ function buildPrompt() {
       ? '\nOnly use pocketmockster MCP tools. Do not use any other MCP servers that may be available.'
       : '';
 
-  return `${profile.system}
+  const auto = profile.autoTools === true;
 
-You are playing Pocket Mockster, a GBA-style monster-catching RPG, LIVE in a real browser through MCP tools. A human is watching you play on screen right now.
-${engineNote}
-
-## How to play
+  const howToPlay = auto
+    ? `## How to play
 1. ${cfg.resume ? 'Call pm_continue once at the start to resume the existing save, then pm_state to see where you are.' : `Call pm_new_game(seed=${cfg.seed}) once at the start.`}
 2. Use pm_map to see the map grid and plan a route (T=tree, W=water, G=grass with wild encounters, .=floor, ,=path, D=door; NPCs block tiles).
 3. Move with pm_walk (chunked, fast). Face NPCs/signs with a direction press, then press "a" to interact. Advance dialogue with "a".
@@ -114,18 +112,38 @@ ${engineNote}
 7. Grass tiles ('G') trigger wild battles. Trainers battle you when you walk into their line of sight.
 8. The game speed is currently ${cfg.speed}x. You may call pm_set_speed to adjust (slow for tricky menus, fast for traversal).
 9. pm_state includes "objective", the game's own next story step - trust it to know where to go next.
-10. To level up before a gym or boss, call pm_grind(targetLevel) from a grass area instead of stepping around manually. Heal at the healPoint shown in pm_state (talk to the nurse) before hard fights.
+10. To level up before a gym or boss, call pm_grind(targetLevel) from a grass area instead of stepping around manually. Heal at the healPoint shown in pm_state (talk to the nurse) before hard fights.`
+    : `## How to play
+You play like a real player: press buttons and see the result on screen. Every action you take (pm_press, pm_walk) returns the full current screen state - mode, position, party, battle details, menu contents, dialogue, nearby tiles. You do NOT need to call pm_state separately after an action; the result IS the screen.
+
+1. ${cfg.resume ? 'Call pm_continue once at the start to resume the existing save.' : `Call pm_new_game(seed=${cfg.seed}) once at the start.`}
+2. Use pm_map to see the full map grid and plan a route (T=tree, W=water, G=grass with wild encounters, .=floor, ,=path, D=door; NPCs block tiles). The state also includes nearbyTiles, a 5x5 grid around you.
+3. Move with pm_walk (direction + tile count). It returns your new position plus the full screen state. If a battle or dialogue interrupts, the state shows it.
+4. Press buttons with pm_press. Batch sequences like ["a","down","down","a"] for menu navigation. a = confirm/talk/advance text, b = cancel/back, start = open menu, arrows = move cursor or face a direction.
+5. In battles, navigate the battle menu manually with pm_press. The battle state shows enemy species/HP, your active mon HP, and available moves with type/category/power/PP. Pick moves wisely based on type effectiveness.
+6. Grass tiles ('G') trigger wild battles. Trainers (marked trainer:true in pm_map) battle you when you walk into their line of sight.
+7. The game speed is currently ${cfg.speed}x. Use pm_set_speed to adjust (slow for tricky menus, fast for traversal).
+8. The state includes "objective", the game's own next story step - trust it to know where to go next.
+9. To heal, go to the healPoint shown in state (talk to the nurse). To level up, walk in grass and fight wild battles manually.
+10. Call pm_state only when you want to check the screen without taking an action.`;
+
+  return `${profile.system}
+
+You are playing Pocket Mockster, a GBA-style monster-catching RPG, LIVE in a real browser through MCP tools. A human is watching you play on screen right now.
+${engineNote}
+
+${howToPlay}
 
 ## Debugging duty
 You are the tester of record for this build. When something looks wrong, work like a debugger, not a reviewer:
-1. OBSERVE: call pm_state immediately, before doing anything else, so the evidence is the real state and not your memory.
+1. OBSERVE: check the screen state from your last action, before doing anything else, so the evidence is the real state and not your memory.
 2. HYPOTHESIZE: state one candidate cause and what observation would disprove it.
 3. MINIMIZE: reduce it to the shortest action that still shows it (one pm_walk of 1 tile, one pm_press), starting from a known position.
 4. REPRODUCE: repeat that minimal sequence. Only set reproduced:true if you saw it a second time.
 5. FILE: call pm_report_finding with precise area/severity/category. A screenshot, the seed, the live state and your last tool calls are attached automatically.
 
 Attribution rules (a wrong "area" sends the fix into the wrong files):
-- A pm_* result that contradicts pm_state, or automation that plays badly, is area "harness", not a game bug. pm_battle follows a fixed scripted policy and is NOT the game's AI; to judge the game's own battle behavior, play a fight manually with pm_press.
+${auto ? `- A pm_* result that contradicts pm_state, or automation that plays badly, is area "harness", not a game bug. pm_battle follows a fixed scripted policy and is NOT the game's AI; to judge the game's own battle behavior, play a fight manually with pm_press.` : `- A pm_* result that contradicts the screen state, or a tool that returns wrong data, is area "harness", not a game bug.`}
 - The screen jumping back to the title, or a tool erroring with something like "execution context was destroyed", is area "environment" (the page reloaded). Re-check pm_state and recover with pm_continue rather than filing it as a game defect.
 - A tool description that disagrees with real behavior is area "docs".
 - If you cannot tell whether behavior is intended design, file severity "question" instead of asserting a bug.
@@ -146,6 +164,7 @@ Work toward the goal turn by turn. When the goal is fully achieved, make your fi
 
 function continuePrompt(info, turn) {
   const d = info.digest;
+  const auto = profile.autoTools === true;
   const lines = [`Continue playing toward your goal (turn ${turn + 2} of ${cfg.maxTurns}).`];
   if (d) {
     lines.push('', 'Progress so far:');
@@ -161,6 +180,15 @@ function continuePrompt(info, turn) {
   }
   const recent = (info.milestones ?? []).slice(-4).map((m) => m.kind + (m.objective ? `: ${m.objective}` : m.to ? `: ${m.to}` : ''));
   if (recent.length) lines.push(`- recent milestones: ${recent.join(' | ')}`);
+  // Recent action history so the agent remembers what it just did
+  const actions = info.recentActions ?? [];
+  if (actions.length) {
+    lines.push('', 'Recent actions:');
+    for (const a of actions) {
+      const args = a.args ? JSON.stringify(a.args) : '';
+      lines.push(`  ${a.tool}(${args})${a.error ? ` -> ERROR ${a.error}` : ''}`);
+    }
+  }
   const filed = info.findings ?? [];
   if (filed.length) {
     lines.push('', `Findings you already filed (do not refile these): ${filed.map((f) => `#${f.index} ${f.title}`).join('; ')}`);
@@ -173,7 +201,9 @@ function continuePrompt(info, turn) {
   }
   lines.push(
     '',
-    'If your party is under-levelled for the next fight, use pm_grind. Remember: end with GOAL_COMPLETE or STUCK when done or blocked.',
+    auto
+      ? 'If your party is under-levelled for the next fight, use pm_grind. Remember: end with GOAL_COMPLETE or STUCK when done or blocked.'
+      : 'If your party is under-levelled, walk in grass and fight wild battles. Remember: end with GOAL_COMPLETE or STUCK when done or blocked.',
   );
   return lines.join('\n');
 }

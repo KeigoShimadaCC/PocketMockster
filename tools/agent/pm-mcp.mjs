@@ -48,7 +48,7 @@ server.registerTool(
   'pm_press',
   {
     description:
-      'Press GBA-style buttons. a = confirm/talk/advance text, b = cancel/back, start = open menu, arrows = move cursor or face a direction. Batch multiple keys in one call (e.g. ["down","down","a"]).',
+      'Press GBA-style buttons. a = confirm/talk/advance text, b = cancel/back, start = open menu, arrows = move cursor or face a direction. Batch multiple keys in one call (e.g. ["down","down","a"]). Returns the full current screen state after all keys are pressed: mode, position, party, battle details, menu contents, dialogue, nearby tiles.',
     inputSchema: { keys: z.array(KEY).describe('ordered list of keys to press') },
   },
   async ({ keys }) => textResult(await call('/api/press', { keys })),
@@ -58,7 +58,7 @@ server.registerTool(
   'pm_walk',
   {
     description:
-      'Walk in a direction for N tiles. Returns from/to positions and walked (tiles actually moved). Stops early if blocked (blocked:true, i.e. a wall/NPC) or if a battle/dialogue interrupts (interrupted:<mode>). The to position is authoritative: all tools are serialized server-side, so results never race with pm_state. Prefer this over repeated pm_press for movement.',
+      'Walk in a direction for N tiles. Returns the full current screen state (mode, position, party, battle, menu, dialogue, nearby tiles) plus from/to positions and walked count. Stops early if blocked (blocked:true) or if a battle/dialogue interrupts (interrupted:<mode>). Prefer this over repeated pm_press for movement.',
     inputSchema: { direction: DIR, tiles: z.number().int().min(1).max(60) },
   },
   async ({ direction, tiles }) => textResult(await call('/api/walk', { dir: direction, tiles })),
