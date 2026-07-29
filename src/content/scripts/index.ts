@@ -55,7 +55,7 @@ export const SCRIPTS: Record<string, ScriptCmd[]> = {
       then: [],
       else: [
         { t: 'say', lines: ['GRUNT: Hey! This part of the woods is Team Rollback territory!', 'GRUNT: Nobody passes without a battle!'] },
-        { t: 'battle', trainer: 'grunt_woods_1', onWin: [{ t: 'setFlag', flag: 'woodsGruntCleared' }, { t: 'say', lines: ['GRUNT: Argh! Fine, go through. But Team Rollback will not forget this!'] }] },
+        { t: 'battle', trainer: 'grunt_woods_1', onWin: [{ t: 'setFlag', flag: 'woodsGruntCleared' }, { t: 'questStart', quest: 'daycare_egg' }, { t: 'questAdvance', quest: 'daycare_egg', stage: 'retrieve' }, { t: 'say', lines: ['GRUNT: Argh! Fine, go through. But Team Rollback will not forget this!', 'You notice a stolen daycare egg near the grunt camp.'] }] },
       ],
     },
   ],
@@ -66,7 +66,9 @@ export const SCRIPTS: Record<string, ScriptCmd[]> = {
       then: [],
       else: [
         { t: 'setFlag', flag: 'caveDredgeSeen' },
-        { t: 'say', lines: ['You hear the rumble of dredging equipment deeper in the cave.', 'Team Rollback is excavating something here...'] },
+        { t: 'questStart', quest: 'fossil' },
+        { t: 'questAdvance', quest: 'fossil', stage: 'deliver' },
+        { t: 'say', lines: ['You hear the rumble of dredging equipment deeper in the cave.', 'Team Rollback is excavating something here...', 'A fossil sample lies near the dredging site! You pocket it carefully.'] },
       ],
     },
   ],
@@ -239,7 +241,8 @@ export const SCRIPTS: Record<string, ScriptCmd[]> = {
       then: [],
       else: [
         { t: 'setFlag', flag: 'skybridgeChaseSeen' },
-        { t: 'say', lines: ['Team Rollback grunts are chasing someone across the sky bridge!', 'The winds are fierce. You need to cross carefully!'] },
+        { t: 'setFlag', flag: 'junoKidnapped' },
+        { t: 'say', lines: ['Team Rollback grunts are chasing someone across the sky bridge!', 'It is Juno! Prof. Maple\'s assistant has been kidnapped!', 'The winds are fierce. You need to cross carefully!'] },
       ],
     },
   ],
@@ -250,7 +253,7 @@ export const SCRIPTS: Record<string, ScriptCmd[]> = {
       then: [],
       else: [
         { t: 'setFlag', flag: 'skybridgeRescueSeen' },
-        { t: 'say', lines: ['You reached the other side! The courier thanks you for the safe delivery.', 'The sky feather packet is intact!'] },
+        { t: 'say', lines: ['You reached the other side! Juno is safe!', 'JUNO: Thank you! I was so scared. Team Rollback wanted me to lead them to Null Peak.', 'JUNO: I will head back to the lab and tell Prof. Maple everything. Be careful up ahead!'] },
       ],
     },
   ],
@@ -387,6 +390,100 @@ export const SCRIPTS: Record<string, ScriptCmd[]> = {
         },
       ],
       else: [{ t: 'say', lines: ['MAPLE: Your journey is just beginning. Come back when you have made progress!'] }],
+    },
+  ],
+  vc_grunt_extort: [
+    {
+      t: 'if',
+      flag: 'vcGruntCleared',
+      then: [],
+      else: [
+        { t: 'say', lines: ['A Team Rollback Grunt is blocking the Mock Center entrance!', 'GRUNT: This Center is now a Rollback facility. Healing costs double!'] },
+        { t: 'battle', trainer: 'grunt_vc_1', onWin: [{ t: 'setFlag', flag: 'vcGruntCleared' }, { t: 'say', lines: ['GRUNT: Fine! The Center is yours again. Rollback retreats!', 'NURSE: Thank you for saving the Center! Please, heal your Mockemon anytime.'] }] },
+      ],
+    },
+  ],
+  bloomrest_ledger_buy: [
+    {
+      t: 'if',
+      flag: 'ledgerBuyStopped',
+      then: [{ t: 'say', lines: ['The official slinks away. The Ledger index is safe in Bloomrest.'] }],
+      else: [
+        { t: 'say', lines: ['A Rollback Agent is negotiating with a corrupt Bloomrest official.', 'AGENT: The Ledger index for 50,000? That is a fair price for a first draft.', 'OFFICIAL: It is a deal. The index will be yours by sunset...'] },
+        { t: 'battle', trainer: 'grunt_ledger_1', onWin: [{ t: 'setFlag', flag: 'ledgerBuyStopped' }, { t: 'say', lines: ['AGENT: The deal is off! Retreating!', 'OFFICIAL: I... I was just doing business! Please, do not tell anyone.', 'The Ledger index has been saved from Team Rollback.'] }] },
+      ],
+    },
+  ],
+  daycare_egg_keeper: [
+    {
+      t: 'if',
+      flag: 'daycareEggReturned',
+      then: [{ t: 'say', lines: ['KEEPER: The egg is safe thanks to you. The daycare is open as always!'] }],
+      else: [
+        {
+          t: 'if',
+          flag: 'woodsGruntCleared',
+          then: [
+            { t: 'setFlag', flag: 'daycareEggReturned' },
+            { t: 'questComplete', quest: 'daycare_egg' },
+            { t: 'giveItem', item: 'luckycharm', count: 1 },
+            { t: 'say', lines: ['KEEPER: You recovered the stolen egg! I cannot thank you enough.', 'Please, take this Lucky Charm as a reward. And the daycare is always open for you!'] },
+          ],
+          else: [
+            { t: 'questStart', quest: 'daycare_egg' },
+            { t: 'questAdvance', quest: 'daycare_egg', stage: 'report' },
+            { t: 'say', lines: ['KEEPER: Oh no! A Team Rollback grunt stole one of our daycare eggs!', 'They fled into Verdant Woods. Please, can you get it back?'] },
+          ],
+        },
+      ],
+    },
+  ],
+  gauntlet_enter: [
+    {
+      t: 'if',
+      flag: 'gauntletWon',
+      then: [{ t: 'say', lines: ['REFEREE: You are the gauntlet champion! Come back anytime for a rematch!'] }],
+      else: [
+        { t: 'questStart', quest: 'gauntlet' },
+        { t: 'questAdvance', quest: 'gauntlet', stage: 'streak' },
+        { t: 'setFlag', flag: 'gauntletWon' },
+        { t: 'questComplete', quest: 'gauntlet' },
+        { t: 'giveItem', item: 'powerband', count: 1 },
+        { t: 'say', lines: ['REFEREE: Welcome to the Voltmere Gauntlet!', 'Back-to-back battles against our toughest trainers!', '...You cleared every challenge! Impressive!', 'Take this Power Band as the gauntlet prize!'] },
+      ],
+    },
+  ],
+  kai_encounter_1: [
+    {
+      t: 'if',
+      flag: 'kaiEnc1Won',
+      then: [{ t: 'say', lines: ['KAI: One badge down, seven to go. Keep up!'] }],
+      else: [
+        { t: 'say', lines: ['KAI: Hey, you got a badge already? Not bad! But do not get cocky. Battle me!'] },
+        { t: 'battle', trainer: 'rival_kai_1', onWin: [{ t: 'setFlag', flag: 'kaiEnc1Won' }, { t: 'say', lines: ['KAI: Okay, okay! You are tougher than you look. See you around!'] }] },
+      ],
+    },
+  ],
+  kai_encounter_2: [
+    {
+      t: 'if',
+      flag: 'kaiEnc2Won',
+      then: [{ t: 'say', lines: ['KAI: Three badges each. The race is on!'] }],
+      else: [
+        { t: 'say', lines: ['KAI: Three badges? I have three too! Let us see whose team grew stronger!'] },
+        { t: 'battle', trainer: 'rival_kai_2', onWin: [{ t: 'setFlag', flag: 'kaiEnc2Won' }, { t: 'say', lines: ['KAI: You are pulling ahead! I need to train harder. Next time!'] }] },
+      ],
+    },
+  ],
+  kai_encounter_4: [
+    {
+      t: 'if',
+      flag: 'kaiEnc4Won',
+      then: [{ t: 'say', lines: ['KAI: Seven badges, same as me. Summit Null awaits us both!'] }],
+      else: [
+        { t: 'say', lines: ['KAI: Seven badges, same as me. The league is close. But first, let me test you!'] },
+        { t: 'battle', trainer: 'rival_kai_4', onWin: [{ t: 'setFlag', flag: 'kaiEnc4Won' }, { t: 'say', lines: ['KAI: You are ready. The Victory Trail and Summit Null await. Do not lose before I get there!'] }] },
+      ],
     },
   ],
 };
