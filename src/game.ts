@@ -2353,8 +2353,9 @@ export class Game implements ScriptHost {
   }
 
   renderMenu(): void {
+    const m = this.menu;
+    if (!m) return; // menu was cleared but mode hasn't transitioned yet
     const ctx = this.ctx;
-    const m = this.menu!;
     const h = 40 + m.items.length * 22 + (m.info ? m.info.length * 18 : 0);
     const w = 260;
     const x = VIEW_W / 2 - w / 2;

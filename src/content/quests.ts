@@ -15,7 +15,7 @@ export const QUESTS: Record<string, QuestDef> = {
       },
       {
         id: 'parcel',
-        objective: 'Deliver Maple\'s parcel and continue toward Verdant City.',
+        objective: 'Talk to the Old Man in Maple Town, then head to Verdant City.',
         journal: 'I picked up Maple\'s parcel and need to deliver it before pushing onward.',
       },
       {
