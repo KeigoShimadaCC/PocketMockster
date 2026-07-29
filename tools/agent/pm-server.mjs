@@ -199,6 +199,36 @@ const CATEGORIES = [
 // wrong repo area, so it is a required field rather than a guess.
 const AREAS = ['game', 'harness', 'docs', 'environment'];
 
+// Per-million-token pricing (input, cached_input, output) in USD.
+// Cached rate is 10% of input for OpenAI models; estimated for Cursor.
+// Source: OpenAI pricing page July 2026, Cursor docs May 2026.
+const MODEL_PRICING = {
+  'gpt-5.6-sol':      { input: 5.00,  cached: 0.50,  output: 30.00 },
+  'gpt-5.5':          { input: 5.00,  cached: 0.50,  output: 30.00 },
+  'gpt-5.4':          { input: 2.50,  cached: 0.25,  output: 15.00 },
+  'gpt-5.4-mini':     { input: 0.75,  cached: 0.075, output: 4.50 },
+  'gpt-5.4-nano':     { input: 0.20,  cached: 0.02,  output: 1.25 },
+  'gpt-5.6-terra':    { input: 2.50,  cached: 0.25,  output: 15.00 },
+  'gpt-5.6-luna':     { input: 1.00,  cached: 0.10,  output: 6.00 },
+  'composer-2.5':     { input: 0.50,  cached: 0.05,  output: 2.50 },
+};
+
+function computeCost(usage, model) {
+  if (!usage || !model) return null;
+  const p = MODEL_PRICING[model];
+  if (!p) return null;
+  const inp = usage.input_tokens ?? 0;
+  const cached = usage.cached_input_tokens ?? 0;
+  const out = usage.output_tokens ?? 0;
+  const uncached = Math.max(0, inp - cached);
+  return {
+    inputCost: +(uncached / 1e6 * p.input).toFixed(4),
+    cachedCost: +(cached / 1e6 * p.cached).toFixed(4),
+    outputCost: +(out / 1e6 * p.output).toFixed(4),
+    total: +((uncached / 1e6 * p.input) + (cached / 1e6 * p.cached) + (out / 1e6 * p.output)).toFixed(4),
+  };
+}
+
 const findings = [];
 const findingByPrint = new Map();
 
@@ -1020,6 +1050,7 @@ function buildReport(status, summary, usage) {
     finalState: lastStatus ? stateSummary(lastStatus) : null,
     stats,
     usage: usage ?? null,
+    cost: computeCost(usage, RUN_META.model),
     summary: summary ?? null,
     milestones,
     anomalies,
@@ -1042,6 +1073,7 @@ function buildReport(status, summary, usage) {
   );
   lines.push(`- duration: ${(durationMs / 1000).toFixed(1)}s | tool calls: ${toolResults.length} | keys: ${stats.keysPressed} | tiles: ${stats.tilesWalked} | battles: ${stats.battlesRun}`);
   if (usage) lines.push(`- tokens: in ${usage.input_tokens ?? '?'} (cached ${usage.cached_input_tokens ?? 0}) / out ${usage.output_tokens ?? '?'}`);
+  if (report.cost) lines.push(`- cost: $${report.cost.total.toFixed(2)} (input $${report.cost.inputCost.toFixed(2)} + cached $${report.cost.cachedCost.toFixed(2)} + output $${report.cost.outputCost.toFixed(2)})`);
   if (summary) {
     lines.push('');
     lines.push('## Agent Summary');
@@ -1456,7 +1488,7 @@ const server = http.createServer(async (req, res) => {
         logEvent('run_end', { status: body.status ?? 'completed' });
         return json(res, 200, {
           ok: true,
-          report: { anomalies: report.anomalies.length, warnings: report.warnings.length },
+          report: { anomalies: report.anomalies.length, warnings: report.warnings.length, cost: report.cost },
           findings: report.findings.map((f) => ({
             severity: f.severity,
             area: f.area,

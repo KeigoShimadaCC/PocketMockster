@@ -199,6 +199,9 @@ async function finalize(status, summary, usage) {
     console.log(`[player]   - findings.md / findings.json (+ findings/*.png evidence)`);
     console.log(`[player]   - events.jsonl (full event log)`);
     console.log(`[player]   - report.md / report.json (${r.report.anomalies} anomalies, ${r.report.warnings} warnings)`);
+    if (r.report.cost) {
+      console.log(`[player]   - cost: $${r.report.cost.total.toFixed(2)} (in $${r.report.cost.inputCost.toFixed(2)} + cached $${r.report.cost.cachedCost.toFixed(2)} + out $${r.report.cost.outputCost.toFixed(2)})`);
+    }
     console.log(`[player]   - final.png (screenshot)`);
   } catch (err) {
     console.error('[player] finalize failed:', err?.message ?? err);
