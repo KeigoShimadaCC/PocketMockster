@@ -120,6 +120,7 @@ export const SCRIPTS: Record<string, ScriptCmd[]> = {
           flag: 'lampParts',
           then: [
             { t: 'setFlag', flag: 'lampRestored' },
+            { t: 'questAdvance', quest: 'lighthouse', stage: 'restore' },
             { t: 'questComplete', quest: 'lighthouse' },
             { t: 'say', lines: ['KEEPER: You found the parts! Let me fix the lamp...', '... ... ...', 'The beacon shines once more! Ships can safely reach Tidewell now.'] },
           ],
@@ -176,6 +177,7 @@ export const SCRIPTS: Record<string, ScriptCmd[]> = {
           flag: 'berriesCollected',
           then: [
             { t: 'setFlag', flag: 'berriesDelivered' },
+            { t: 'questAdvance', quest: 'berries', stage: 'deliver' },
             { t: 'giveItem', item: 'sitrusberry', count: 3 },
             { t: 'questComplete', quest: 'berries' },
             { t: 'say', lines: ['FARMER: You saved this season! Take these berries as thanks!'] },
@@ -513,6 +515,7 @@ export const SCRIPTS: Record<string, ScriptCmd[]> = {
           flag: 'nibbitFound',
           then: [
             { t: 'setFlag', flag: 'nibbitReturned' },
+            { t: 'questAdvance', quest: 'lost_nibbit', stage: 'return' },
             { t: 'questComplete', quest: 'lost_nibbit' },
             { t: 'giveItem', item: 'moonstone', count: 1 },
             { t: 'say', lines: ['MOM: You found my Nibbit! Thank you so much!', 'Please, take this Moon Stone as a reward!'] },

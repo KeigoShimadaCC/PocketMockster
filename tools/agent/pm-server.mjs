@@ -1036,6 +1036,14 @@ async function boot() {
   page.on('pageerror', (err) => {
     logEvent('anomaly', { kind: 'pageerror', message: String(err).slice(0, 500) });
     stats.anomalies++;
+    autoFinding({
+      severity: 'blocker',
+      category: 'crash',
+      area: 'game',
+      title: `uncaught exception: ${String(err.message ?? err).slice(0, 90)}`,
+      expected: 'the game runs without uncaught exceptions',
+      actual: String(err.stack ?? err).slice(0, 800),
+    });
   });
   page.on('console', (msg) => {
     if (msg.type() !== 'error') return;
@@ -1068,6 +1076,15 @@ async function boot() {
       message: 'page reloaded outside of new-game (vite HMR on a source edit, or a crash); all game progress was reset to the title screen',
     });
     pushFeed('!! page reloaded - progress reset');
+    autoFinding({
+      severity: 'major',
+      category: 'crash',
+      area: 'environment',
+      title: 'page reloaded outside of a navigation and reset unsaved progress',
+      expected: 'the live page stays loaded for the whole run',
+      actual:
+        'the page fired a load event mid-run, resetting the game to the title screen; usually a vite HMR reload caused by editing src/ during the run (use --build for long runs), otherwise a hard crash',
+    });
   });
   if (speed !== 1) await page.evaluate((n) => window.__PM.debug.setSpeed(n), speed);
   await getState();
@@ -1119,6 +1136,7 @@ async function runTool(tool, toolArgs, fn) {
     const result = await fn();
     const s = result?.state ?? (result === undefined ? await getState() : null);
     if (s) trackStuck(s, tool);
+    await flushAuto();
     const durationMs = Date.now() - start;
     logEvent('tool_result', { tool, durationMs, result: summarizeResult(result), state: s ? stateSummary(s) : null });
     pushFeed(describeTool(tool, toolArgs, result));

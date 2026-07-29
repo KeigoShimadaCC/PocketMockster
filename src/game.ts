@@ -118,6 +118,7 @@ interface MenuState {
   onSelect: (i: number) => void;
   onCancel: (() => void) | null;
   info?: string[];
+  onChange?: (i: number) => void;
 }
 
 type Mode =
@@ -983,6 +984,8 @@ export class Game implements ScriptHost {
       this.showDialogue(['HIKER: How is my old Pebblit doing? It was a fine trade, was it not?']);
       return;
     }
+    this.quests.start('hiker_trade');
+    this.quests.advance('hiker_trade', 'trade');
     this.showDialogue(
       [
         'HIKER: I found this Pebblit in the mountains, but it misses adventure!',
@@ -1031,6 +1034,7 @@ export class Game implements ScriptHost {
           this.flags.hikerTraded = true;
           this.seenSpecies.add('pebblit');
           this.caughtSpecies.add('pebblit');
+          this.quests.complete('hiker_trade');
           this.closeAllMenus();
           const evoTo = checkEvolution(received, { kind: 'trade' });
           const lines = [
@@ -1533,17 +1537,18 @@ export class Game implements ScriptHost {
     const active = this.quests.active();
     const done = this.quests.completed();
     const entries = [...active, ...done];
+    const updateInfo = (i: number): void => {
+      const q = entries[i];
+      if (q) this.menu!.info = wrap(this.quests.journal(q.id).slice(-1)[0] ?? '', 34);
+    };
     this.openMenu(
       {
         title: 'QUEST LOG',
         items: entries.length > 0 ? entries.map((q) => `${this.quests.state(q.id).done ? '[x]' : '[ ]'} ${q.title}`) : ['(no quests yet)'],
         index: 0,
         info: entries.length > 0 ? wrap(this.quests.journal(entries[0].id).slice(-1)[0] ?? '', 34) : undefined,
-        onSelect: (i) => {
-          const q = entries[i];
-          if (!q) return;
-          this.menu!.info = wrap(this.quests.journal(q.id).slice(-1)[0] ?? '', 34);
-        },
+        onSelect: (i) => updateInfo(i),
+        onChange: (i) => updateInfo(i),
         onCancel: () => this.closeMenu(),
       },
       true,
@@ -1866,8 +1871,14 @@ export class Game implements ScriptHost {
         const k = consumePress();
         const m = this.menu;
         if (!k || !m) break;
-        if (k === 'up') m.index = (m.index - 1 + m.items.length) % m.items.length;
-        if (k === 'down') m.index = (m.index + 1) % m.items.length;
+        if (k === 'up') {
+          m.index = (m.index - 1 + m.items.length) % m.items.length;
+          m.onChange?.(m.index);
+        }
+        if (k === 'down') {
+          m.index = (m.index + 1) % m.items.length;
+          m.onChange?.(m.index);
+        }
         if (k === 'a') m.onSelect(m.index);
         if (k === 'b' && m.onCancel) m.onCancel();
         break;
