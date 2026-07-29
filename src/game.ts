@@ -35,8 +35,9 @@ import { drawSprite, MON_SPRITES, PEOPLE } from './sprites';
 import { ScriptRunner, type ScriptHost } from './script';
 import { SCRIPTS } from './content/scripts';
 import { trainerById } from './content/trainers';
-import { QuestLog, type QuestProgress } from './quests';
+import { QuestLog } from './quests';
 import { QUESTS } from './content/quests';
+import { decodeSave, encodeSave, migrateQuests, SAVE_VERSION, type SaveData } from './save';
 import { GYMS, GYM_BY_LEADER, type GymDef } from './content/gyms';
 import {
   CreditsRoll,
@@ -56,8 +57,6 @@ const BAR_H = 32;
 
 export type Facing = 'up' | 'down' | 'left' | 'right';
 
-const SAVE_VERSION = 2;
-
 /** Beating these trainers opens the gate in front of whatever comes next. */
 const TRAINER_UNLOCK_FLAGS: Record<string, string[]> = {
   elite_ryn: ['elite1Beaten'],
@@ -68,44 +67,6 @@ const TRAINER_UNLOCK_FLAGS: Record<string, string[]> = {
   admin_patch: ['patchBeaten'],
   admin_merge: ['mergeBeaten'],
 };
-
-interface SaveData {
-  version?: number;
-  savedAt?: number;
-  playFrames?: number;
-  quests?: QuestProgress;
-  mapId: string;
-  px: number;
-  py: number;
-  party: Mockemon[];
-  storage?: Mockemon[];
-  inventory?: Record<string, number>;
-  money?: number;
-  badges?: string[];
-  flags?: Record<string, boolean>;
-  defeatedTrainers?: string[];
-  collectedItems?: string[];
-  healPoint?: { map: string; x: number; y: number };
-  seen?: string[];
-  caught?: string[];
-  minute?: number;
-  daycare?: (Mockemon | null)[];
-  daycareSteps?: number;
-  daycareEgg?: Mockemon | null;
-}
-
-// v1 saves predate the quest log: rebuild it from the flags/badges they did store.
-function migrateQuests(flags: Record<string, boolean>, badges: string[]): QuestProgress {
-  const log = new QuestLog(QUESTS);
-  if (flags.starterChosen) {
-    log.start('main_journey');
-    log.advance('main_journey', 'parcel');
-  }
-  if (badges.length > 0) log.advance('main_journey', `badge${Math.min(badges.length + 1, 8)}`);
-  if (flags.gotBalls) log.complete('parcel');
-  if (flags.hikerTraded) log.complete('hiker_trade');
-  return log.toJSON();
-}
 
 function itemName(id: string): string {
   return ITEMS[id]?.name ?? id;
@@ -547,8 +508,8 @@ export class Game implements ScriptHost {
     return SLOT_KEYS[this.slot] ?? SLOT_KEYS[0];
   }
 
-  save(): void {
-    const data = {
+  toSaveData(): SaveData {
+    return {
       version: SAVE_VERSION,
       savedAt: Date.now(),
       playFrames: this.playFrames,
@@ -572,23 +533,37 @@ export class Game implements ScriptHost {
       daycareSteps: this.daycareSteps,
       daycareEgg: this.daycareEgg,
     };
-    localStorage.setItem(this.slotKey(), JSON.stringify(data));
+  }
+
+  save(): void {
+    localStorage.setItem(this.slotKey(), encodeSave(this.toSaveData()));
+  }
+
+  /** Best-effort save; storage may be unavailable (private mode, quota). */
+  persist(): boolean {
+    try {
+      this.save();
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   load(slot = this.slot): boolean {
     this.slot = slot;
-    const raw = localStorage.getItem(this.slotKey());
-    if (!raw) return false;
-    let d: SaveData;
+    let raw: string | null;
     try {
-      d = JSON.parse(raw) as SaveData;
+      raw = localStorage.getItem(this.slotKey());
     } catch {
       return false;
     }
-    if (!d || typeof d !== 'object' || !d.mapId || !MAPS[d.mapId] || !Array.isArray(d.party)) return false;
+    if (!raw) return false;
+    const d = decodeSave(raw);
+    if (!d) return false;
+    this.resetRunState();
     this.mapId = d.mapId;
-    this.px = d.px ?? 5;
-    this.py = d.py ?? 6;
+    this.px = d.px;
+    this.py = d.py;
     this.party = d.party;
     this.storage = d.storage ?? [];
     this.inventory = d.inventory ?? { potion: 0, superpotion: 0, mockball: 0 };
@@ -610,7 +585,46 @@ export class Game implements ScriptHost {
     return true;
   }
 
+  /** Return every run-scoped field to its first-boot value. */
+  resetRunState(): void {
+    this.party = [];
+    this.storage = [];
+    this.inventory = { potion: 0, superpotion: 0, mockball: 0 };
+    this.money = 3000;
+    this.badges = [];
+    this.flags = {};
+    this.defeatedTrainers = new Set();
+    this.collectedItems = new Set();
+    this.healPoint = { map: 'mapletown', x: 7, y: 9 };
+    this.seenSpecies = new Set();
+    this.caughtSpecies = new Set();
+    this.minute = 600;
+    this.daycare = [null, null];
+    this.daycareSteps = 0;
+    this.daycareEgg = null;
+    this.dexIndex = 0;
+    this.dialogueQueue = [];
+    this.dialogueDone = null;
+    this.menu = null;
+    this.menuStack = [];
+    this.battle = null;
+    this.battleOnEnd = null;
+    this.battleForcedSwitch = false;
+    this.summaryMon = null;
+    this.pendingHealItem = null;
+    this.pendingGiveItem = null;
+    this.pendingStone = null;
+    this.endingShown = false;
+    this.playFrames = 0;
+    this.moving = false;
+    this.moveOffX = 0;
+    this.moveOffY = 0;
+    this.scripts.abort();
+    this.quests = new QuestLog(QUESTS);
+  }
+
   newGame(): void {
+    this.resetRunState();
     this.mapId = 'lab';
     this.px = 5;
     this.py = 6;
@@ -1133,7 +1147,8 @@ export class Game implements ScriptHost {
       cindercub: 'puddlefin',
       puddlefin: 'sproutle',
     };
-    const playerStarter = this.party[0].species;
+    const playerStarter = this.party[0]?.species;
+    if (!playerStarter) return;
     const rivalMon = counter[playerStarter] ?? 'cindercub';
     this.showDialogue(
       ["KAI: Not so fast! Let's see whose Mockemon is stronger. Battle me!"],
@@ -1246,11 +1261,7 @@ export class Game implements ScriptHost {
   }
 
   autosave(): void {
-    try {
-      this.save();
-    } catch {
-      // storage may be unavailable; autosave is best-effort
-    }
+    this.persist();
   }
 
   rollEncounter(): EncounterEntry {
@@ -1524,9 +1535,9 @@ export class Game implements ScriptHost {
         } else if (i === 3) this.openQuestMenu();
         else if (i === 4) this.openStorageMenu();
         else if (i === 5) {
-          this.save();
+          const ok = this.persist();
           this.closeAllMenus();
-          this.showDialogue(['Your progress was saved!']);
+          this.showDialogue([ok ? 'Your progress was saved!' : 'Save failed! Storage is unavailable.']);
         } else this.closeAllMenus();
       },
       onCancel: () => this.closeAllMenus(),

@@ -51,7 +51,7 @@ test('pause menu shows the next objective and the quest log lists quests', async
   await waitMode(page, 'menu');
   const s = await state(page);
   expect(s.menu?.info?.join(' ')).toContain('NEXT:');
-  expect(s.objective).toContain('parcel');
+  expect(s.objective).toContain('Old Man'); // main_journey 'parcel' stage objective
   await pickMenu(page, 'QUESTS');
   await waitMode(page, 'menu');
   const q = await state(page);

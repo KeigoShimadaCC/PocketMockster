@@ -54,7 +54,7 @@ function nearbyTilesGrid(g: Game): string[][] | null {
 }
 
 if (params.get('noenc') === '1') game.noEncounters = true;
-if (!introSeen() && !params.get('noenc')) game.playIntro();
+if (!introSeen() && params.get('noenc') !== '1') game.playIntro();
 
 let last = 0;
 const STEP = 1000 / 60;
