@@ -972,13 +972,36 @@ function updateFindingsIndex() {
       title: f.title,
       runs: [],
       totalOccurrences: 0,
+      status: 'open',
     };
     if (!entry.runs.includes(RUN_ID)) entry.runs.push(RUN_ID);
     entry.totalOccurrences += f.occurrences;
     entry.lastSeenAt = f.lastSeenAt;
+    // If a fingerprint was marked "fixed" but appears in a new run,
+    // the fix didn't work - flip to "regressed".
+    if (entry.status === 'fixed') {
+      entry.status = 'regressed';
+    }
     index[f.print] = entry;
   }
   fs.writeFileSync(indexPath, JSON.stringify(index, null, 2));
+
+  // Write a human-readable markdown summary of the cross-run index
+  const entries = Object.values(index);
+  const statusOrder = { open: 0, regressed: 1, fixed: 2, wontfix: 3 };
+  entries.sort((a, b) => (statusOrder[a.status] ?? 9) - (statusOrder[b.status] ?? 9));
+  const mdLines = ['# Cross-Run Findings Index', ''];
+  const byStatus = entries.reduce((acc, e) => { (acc[e.status] ??= []).push(e); return acc; }, {});
+  mdLines.push(`Total ${entries.length} (` + Object.entries(byStatus).map(([s, l]) => `${l.length} ${s}`).join(', ') + ')', '');
+  mdLines.push('| fingerprint | status | severity | area | title | runs | last seen |');
+  mdLines.push('|---|---|---|---|---|---|---|');
+  for (const e of entries) {
+    mdLines.push(
+      `| \`${e.print}\` | ${e.status} | ${e.severity} | ${e.area} | ${e.title.replace(/\|/g, '/')} | ${e.runs.length} | ${e.lastSeenAt?.slice(0, 10) ?? '-'} |`,
+    );
+  }
+  fs.writeFileSync(path.join(REPO_ROOT, 'agent-runs', 'findings-index.md'), mdLines.join('\n'));
+
   return index;
 }
 
