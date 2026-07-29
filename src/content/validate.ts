@@ -6,12 +6,9 @@ import { MAPS } from './maps';
 import { QUESTS } from './quests';
 import { SCRIPTS } from './scripts';
 import { TRAINERS } from './trainers';
-import { SHALLOW_TILE, SOLID_TILES, type GameMap } from './types';
+import { SOLID_TILES, TILE_DEFS, resolveTile, type GameMap } from './types';
 
-export const KNOWN_TILES = new Set([
-  '.', ',', 'G', 'T', 'W', 'R', 'B', 'D', 'S', 'w', 'F', 'C', 'M', 'P', 'o',
-  SHALLOW_TILE, 'x', '#', '_',
-]);
+export const KNOWN_TILES = new Set(Object.keys(TILE_DEFS));
 const BASE_INVENTORY_ITEM_IDS = new Set(['mockball', 'potion', 'superpotion']);
 const RUNTIME_GENERATED_FLAG_EXACT = new Set([
   'gymDone',
@@ -71,7 +68,7 @@ function inBounds(map: GameMap, x: number, y: number): boolean {
 }
 
 function tileAt(map: GameMap, x: number, y: number): string {
-  return map.tiles[y]?.[x] ?? '';
+  return resolveTile(map, map.tiles[y]?.[x] ?? '');
 }
 
 function addIssue(
@@ -171,6 +168,27 @@ export function validateMaps(maps: Record<string, GameMap> = MAPS, sources: Vali
     }
 
     const width = map.tiles[0]?.length ?? 0;
+
+    // validate legend remapping
+    if (map.legend) {
+      for (const [key, value] of Object.entries(map.legend)) {
+        if (!KNOWN_TILES.has(value)) {
+          issues.push({
+            severity: 'error',
+            where: `map:${mapKey}:legend['${key}']`,
+            message: `Legend target '${value}' is not a known tile`,
+          });
+        }
+        if (KNOWN_TILES.has(key)) {
+          issues.push({
+            severity: 'warn',
+            where: `map:${mapKey}:legend['${key}']`,
+            message: `Legend key '${key}' shadows a canonical tile character`,
+          });
+        }
+      }
+    }
+
     for (let y = 0; y < map.tiles.length; y++) {
       const row = map.tiles[y];
       if (row.length !== width) {
@@ -182,11 +200,12 @@ export function validateMaps(maps: Record<string, GameMap> = MAPS, sources: Vali
       }
       for (let x = 0; x < row.length; x++) {
         const ch = row[x];
-        if (!KNOWN_TILES.has(ch)) {
+        const resolved = resolveTile(map, ch);
+        if (!KNOWN_TILES.has(resolved)) {
           issues.push({
             severity: 'error',
             where: `map:${mapKey}:tile(${x},${y})`,
-            message: `Unknown tile '${ch}'`,
+            message: `Unknown tile '${ch}'${ch !== resolved ? ` (legend resolves to '${resolved}')` : ''}`,
           });
         }
       }
@@ -457,7 +476,7 @@ export function validateMaps(maps: Record<string, GameMap> = MAPS, sources: Vali
       }
     }
 
-    const hasWindTiles = map.tiles.some((row) => row.includes('#'));
+    const hasWindTiles = map.tiles.some((row) => [...row].some((ch) => resolveTile(map, ch) === '#'));
     if (hasWindTiles && !map.windDir) {
       issues.push({
         severity: 'error',
@@ -472,7 +491,7 @@ export function validateMaps(maps: Record<string, GameMap> = MAPS, sources: Vali
         message: "Map sets windDir but has no '#' tiles",
       });
     }
-    const hasLava = map.tiles.some((row) => row.includes('x'));
+    const hasLava = map.tiles.some((row) => [...row].some((ch) => resolveTile(map, ch) === 'x'));
     if (hasLava && !map.lavaPeriod) {
       issues.push({
         severity: 'error',
@@ -501,7 +520,7 @@ export function validateMaps(maps: Record<string, GameMap> = MAPS, sources: Vali
       }
     }
 
-    const hasTallGrass = map.tiles.some((row) => row.includes('G'));
+    const hasTallGrass = map.tiles.some((row) => [...row].some((ch) => resolveTile(map, ch) === 'G'));
     if (map.encounterRate > 0 && !hasTallGrass) {
       issues.push({
         severity: 'error',

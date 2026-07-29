@@ -8,6 +8,7 @@ import {
   MAPS,
   SHALLOW_TILE,
   SOLID_TILES,
+  resolveTile,
   type EncounterEntry,
   type GameMap,
   type Gate,
@@ -445,7 +446,7 @@ export class Game implements ScriptHost {
   tileAt(x: number, y: number): string {
     const rows = this.map.tiles;
     if (y < 0 || y >= rows.length || x < 0 || x >= rows[0].length) return 'T';
-    return rows[y][x];
+    return resolveTile(this.map, rows[y][x]);
   }
 
   gateAt(x: number, y: number): Gate | undefined {

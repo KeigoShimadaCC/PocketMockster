@@ -110,10 +110,56 @@ export interface GameMap {
   pads?: Pad[];
   windDir?: Dir4; // direction '#' tiles push the player
   lavaPeriod?: number; // frames per on/off cycle for 'x' tiles
+  legend?: Record<string, string>; // remap custom tile chars to canonical ones
 }
 
-export const SOLID_TILES = new Set(['T', 'W', 'B', 'R', 'D', 'w', 'C', 'S', 'o', 'P']);
+// ---------- tile registry ----------
+
+export interface TileDef {
+  solid: boolean;
+  encounterGrass?: boolean;
+  shallow?: boolean;
+  wind?: boolean;
+  lava?: boolean;
+  counter?: boolean;
+  table?: boolean;
+}
+
+export const TILE_DEFS: Record<string, TileDef> = {
+  '.': { solid: false },
+  ',': { solid: false },
+  'G': { solid: false, encounterGrass: true },
+  'T': { solid: true },
+  'W': { solid: true },
+  'R': { solid: true },
+  'B': { solid: true },
+  'D': { solid: true },
+  'S': { solid: true },
+  'w': { solid: true },
+  'F': { solid: false },
+  'C': { solid: true, counter: true },
+  'M': { solid: false },
+  'P': { solid: true, table: true },
+  'o': { solid: true },
+  '~': { solid: false, shallow: true },
+  'x': { solid: false, lava: true },
+  '#': { solid: false, wind: true },
+  '_': { solid: false },
+};
+
+export const SOLID_TILES = new Set(
+  Object.entries(TILE_DEFS).filter(([, d]) => d.solid).map(([ch]) => ch),
+);
 
 /** Shallow water: crossable only once the Tide Badge is in hand. */
 export const SHALLOW_TILE = '~';
 export const BADGE_FLAG_SHALLOW = 'badge_tide';
+
+/** Resolve a tile character through a map's optional legend remapping. */
+export function resolveTile(map: GameMap, ch: string): string {
+  return map.legend?.[ch] ?? ch;
+}
+
+export function tileDef(map: GameMap, ch: string): TileDef | undefined {
+  return TILE_DEFS[resolveTile(map, ch)];
+}
