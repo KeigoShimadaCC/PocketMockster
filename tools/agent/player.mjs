@@ -51,6 +51,9 @@ const cfg = {
   effort: String(args.effort ?? profile.effort),
   speed: Number(args.speed ?? profile.speed ?? 1),
   seed: args.seed !== undefined ? Number(args.seed) : 42,
+  resume: !!args.continue,
+  // long runs should not share a hot-reloading dev server with an editor
+  build: args.build !== undefined ? !!args.build : Number(args['max-minutes'] ?? 45) > 20,
   maxTurns: Number(args['max-turns'] ?? 12),
   maxMinutes: Number(args['max-minutes'] ?? 45),
   headless: !!args.headless,
@@ -94,17 +97,32 @@ function buildPrompt() {
 You are playing Pocket Mockster, a GBA-style monster-catching RPG, LIVE in a real browser through MCP tools. A human is watching you play on screen right now.
 
 ## How to play
-1. Call pm_new_game(seed=${cfg.seed}) once at the start.
-2. Use pm_map to see the map grid and plan a route (T=tree, W=water, g=grass with wild encounters, .=floor, D=door; NPCs block tiles).
+1. ${cfg.resume ? 'Call pm_continue once at the start to resume the existing save, then pm_state to see where you are.' : `Call pm_new_game(seed=${cfg.seed}) once at the start.`}
+2. Use pm_map to see the map grid and plan a route (T=tree, W=water, G=grass with wild encounters, .=floor, ,=path, D=door; NPCs block tiles).
 3. Move with pm_walk (chunked, fast). Face NPCs/signs with a direction press, then press "a" to interact. Advance dialogue with "a".
 4. When pm_state shows mode:"battle", call pm_battle to run it automatically.
 5. Menus are navigated with arrows + "a" (confirm) / "b" (cancel). "start" opens the pause menu.
 6. Check pm_state whenever you are unsure what is happening.
-7. Grass tiles ('g') trigger wild battles when encounters are on. Trainers battle you when you walk into their line of sight.
+7. Grass tiles ('G') trigger wild battles. Trainers battle you when you walk into their line of sight.
 8. The game speed is currently ${cfg.speed}x. You may call pm_set_speed to adjust (slow for tricky menus, fast for traversal).
+9. pm_state includes "objective", the game's own next story step - trust it to know where to go next.
+10. To level up before a gym or boss, call pm_grind(targetLevel) from a grass area instead of stepping around manually. Heal at the healPoint shown in pm_state (talk to the nurse) before hard fights.
 
-## Testing duty
-You are also a QA tester. Whenever you notice a bug, confusing UX, broken text, weird collision, or anything unexpected, call pm_report_note with a clear description (what you did, what you expected, what happened). Also report things that are notably GOOD.
+## Debugging duty
+You are the tester of record for this build. When something looks wrong, work like a debugger, not a reviewer:
+1. OBSERVE: call pm_state immediately, before doing anything else, so the evidence is the real state and not your memory.
+2. HYPOTHESIZE: state one candidate cause and what observation would disprove it.
+3. MINIMIZE: reduce it to the shortest action that still shows it (one pm_walk of 1 tile, one pm_press), starting from a known position.
+4. REPRODUCE: repeat that minimal sequence. Only set reproduced:true if you saw it a second time.
+5. FILE: call pm_report_finding with precise area/severity/category. A screenshot, the seed, the live state and your last tool calls are attached automatically.
+
+Attribution rules (a wrong "area" sends the fix into the wrong files):
+- A pm_* result that contradicts pm_state, or automation that plays badly, is area "harness", not a game bug. pm_battle follows a fixed scripted policy and is NOT the game's AI; to judge the game's own battle behavior, play a fight manually with pm_press.
+- The screen jumping back to the title, or a tool erroring with something like "execution context was destroyed", is area "environment" (the page reloaded). Re-check pm_state and recover with pm_continue rather than filing it as a game defect.
+- A tool description that disagrees with real behavior is area "docs".
+- If you cannot tell whether behavior is intended design, file severity "question" instead of asserting a bug.
+
+Duplicates are merged automatically, so file each distinct issue once and move on. Do file severity "good" for things that work notably well, and prefer a few well-evidenced findings over many vague ones.
 
 ## Rules
 - ${debugRule}
@@ -118,6 +136,42 @@ ${cfg.goal}
 Work toward the goal turn by turn. When the goal is fully achieved, make your final message start with exactly "GOAL_COMPLETE" followed by a short summary of what you did and your QA observations. If you become completely unable to progress (blocked, soft-locked, or the game is broken), make your final message start with exactly "STUCK" followed by the reason.`;
 }
 
+// A long run drifts if every turn starts from "keep going": re-anchor the agent
+// on the game's own objective and its measurable progress instead.
+function continuePrompt(info, turn) {
+  const d = info.digest;
+  const lines = [`Continue playing toward your goal (turn ${turn + 2} of ${cfg.maxTurns}).`];
+  if (d) {
+    lines.push('', 'Progress so far:');
+    lines.push(`- objective: ${d.objective ?? 'unknown'}`);
+    lines.push(`- badges: ${d.badges.length}${d.badges.length ? ` (${d.badges.join(', ')})` : ''}`);
+    lines.push(`- location: ${d.map} (${d.x},${d.y}), mode ${d.mode}`);
+    lines.push(`- party: ${d.party.join(', ') || '(empty)'}`);
+    lines.push(`- money: ${d.money} | heal point: ${d.healPoint ?? 'unknown'} | dex: ${d.caught} caught`);
+    const keyItems = Object.entries(d.inventory ?? {})
+      .map(([k, n]) => `${k} x${n}`)
+      .join(', ');
+    if (keyItems) lines.push(`- items: ${keyItems}`);
+  }
+  const recent = (info.milestones ?? []).slice(-4).map((m) => m.kind + (m.objective ? `: ${m.objective}` : m.to ? `: ${m.to}` : ''));
+  if (recent.length) lines.push(`- recent milestones: ${recent.join(' | ')}`);
+  const filed = info.findings ?? [];
+  if (filed.length) {
+    lines.push('', `Findings you already filed (do not refile these): ${filed.map((f) => `#${f.index} ${f.title}`).join('; ')}`);
+    const unconfirmed = filed.filter((f) => !f.reproduced && f.severity !== 'good');
+    if (unconfirmed.length) {
+      lines.push(
+        `Unconfirmed so far: ${unconfirmed.map((f) => `#${f.index}`).join(', ')}. If you get a chance, reproduce one minimally and refile it with reproduced:true.`,
+      );
+    }
+  }
+  lines.push(
+    '',
+    'If your party is under-levelled for the next fight, use pm_grind. Remember: end with GOAL_COMPLETE or STUCK when done or blocked.',
+  );
+  return lines.join('\n');
+}
+
 let serverProc = null;
 let finalized = false;
 
@@ -127,7 +181,16 @@ async function finalize(status, summary, usage) {
   try {
     const r = await api('/api/finalize', { status, summary, usage });
     console.log(`\n[player] run ${cfg.runId} -> ${status}`);
+    if (r.findings?.length) {
+      console.log(`[player] ${r.findings.length} findings:`);
+      for (const f of r.findings) {
+        console.log(`  \x1b[33m[${f.severity}/${f.area}/${f.category}]\x1b[0m ${f.title}${f.occurrences > 1 ? ` (${f.occurrences}x)` : ''}`);
+      }
+    } else {
+      console.log('[player] no findings filed');
+    }
     console.log(`[player] artifacts: ${r.runDir}`);
+    console.log(`[player]   - findings.md / findings.json (+ findings/*.png evidence)`);
     console.log(`[player]   - events.jsonl (full event log)`);
     console.log(`[player]   - report.md / report.json (${r.report.anomalies} anomalies, ${r.report.warnings} warnings)`);
     console.log(`[player]   - final.png (screenshot)`);
@@ -142,7 +205,9 @@ async function finalize(status, summary, usage) {
 }
 
 async function main() {
-  console.log(`[player] profile=${cfg.profile} model=${cfg.model} effort=${cfg.effort} speed=${cfg.speed}x seed=${cfg.seed}`);
+  console.log(
+    `[player] profile=${cfg.profile} model=${cfg.model} effort=${cfg.effort} speed=${cfg.speed}x seed=${cfg.seed}${cfg.resume ? ' (resuming save)' : ''}${cfg.build ? ' (frozen build)' : ''}`,
+  );
   console.log(`[player] goal: ${cfg.goal}`);
 
   serverProc = spawn(
@@ -159,6 +224,7 @@ async function main() {
       '--model', cfg.model,
       '--effort', cfg.effort,
       ...(cfg.headless ? ['--headless'] : []),
+      ...(cfg.build ? ['--build'] : []),
     ],
     { stdio: ['ignore', 'pipe', 'pipe'] },
   );
@@ -242,6 +308,13 @@ async function main() {
         }
       }
 
+      const info = await api('/api/run-info');
+      if (info.cleared) {
+        console.log('[player] ending reached - game cleared');
+        status = 'cleared';
+        break;
+      }
+
       const verdict = lastAgentText.trimStart();
       if (verdict.startsWith('GOAL_COMPLETE')) {
         status = 'completed';
@@ -251,7 +324,7 @@ async function main() {
         status = 'stuck';
         break;
       }
-      prompt = 'Continue playing toward your goal. Remember: end with GOAL_COMPLETE or STUCK when done or blocked.';
+      prompt = continuePrompt(info, turn);
     }
   } catch (err) {
     status = 'error';
@@ -262,7 +335,7 @@ async function main() {
 
   await finalize(status, lastAgentText, totals);
   serverProc?.kill('SIGTERM');
-  process.exit(status === 'completed' ? 0 : status === 'stuck' ? 2 : 3);
+  process.exit(status === 'completed' || status === 'cleared' ? 0 : status === 'stuck' ? 2 : 3);
 }
 
 process.on('SIGINT', async () => {

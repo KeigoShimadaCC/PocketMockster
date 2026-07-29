@@ -11,6 +11,7 @@ import http from 'node:http';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { chromium } from '@playwright/test';
 
@@ -37,6 +38,7 @@ const args = parseArgs(process.argv);
 const PORT = Number(args.port ?? 8787);
 const VITE_PORT = Number(args['vite-port'] ?? 5199);
 const HEADLESS = !!args.headless;
+const FROZEN = !!args.build;
 const RUN_ID = String(args['run-id'] ?? new Date().toISOString().replace(/[:.]/g, '-'));
 const RUN_META = {
   runId: RUN_ID,
@@ -44,6 +46,7 @@ const RUN_META = {
   goal: args.goal ?? null,
   seed: args.seed !== undefined ? Number(args.seed) : null,
   speed: Number(args.speed ?? 1),
+  frozenBuild: FROZEN,
   model: args.model ?? null,
   effort: args.effort ?? null,
   headless: HEADLESS,
@@ -53,12 +56,24 @@ const RUN_META = {
 // Deliberately not under test-results/: playwright wipes that directory on every run.
 const RUN_DIR = path.join(REPO_ROOT, 'agent-runs', RUN_ID);
 fs.mkdirSync(RUN_DIR, { recursive: true });
+fs.mkdirSync(path.join(RUN_DIR, 'findings'), { recursive: true });
 
 // ---------- event log ----------
 let seq = 0;
 const events = [];
 const logStream = fs.createWriteStream(path.join(RUN_DIR, 'events.jsonl'), { flags: 'a' });
-const KNOWN_MODES = new Set(['title', 'overworld', 'dialogue', 'menu', 'battle', 'ending', 'naming']);
+const KNOWN_MODES = new Set([
+  'intro',
+  'title',
+  'overworld',
+  'dialogue',
+  'menu',
+  'battle',
+  'summary',
+  'dex',
+  'ending',
+  'credits',
+]);
 
 function logEvent(type, data = {}) {
   const ev = { seq: seq++, ts: new Date().toISOString(), type, ...data };
@@ -126,6 +141,7 @@ let page = null;
 let speed = RUN_META.speed;
 let lastPosKey = null;
 let expectReload = false;
+let cleared = false;
 let samePosStreak = 0;
 let stuckWarned = false;
 let prevSummary = null;
@@ -136,6 +152,7 @@ const stats = {
   battlesRun: 0,
   anomalies: 0,
   warnings: 0,
+  findings: 0,
 };
 
 function stateSummary(s) {
@@ -147,8 +164,11 @@ function stateSummary(s) {
     y: s.y,
     money: s.money,
     badges: s.badges,
+    objective: s.objective ?? null,
     party: s.party.map((m) => `${m.species} L${m.level} ${m.hp}/${m.maxHp}`),
     storage: s.storageCount,
+    inventory: Object.fromEntries(Object.entries(s.inventory ?? {}).filter(([, n]) => n > 0)),
+    healPoint: s.healPoint ? `${s.healPoint.map} (${s.healPoint.x},${s.healPoint.y})` : null,
     menu: s.menu ? `${s.menu.title} [${s.menu.index}]` : null,
     dialogue: s.dialogue ? s.dialogue.slice(0, 90) : null,
     battle: s.battle
@@ -157,7 +177,125 @@ function stateSummary(s) {
     seen: s.seen,
     caught: s.caught,
     minute: s.minute,
+    cleared: s.mode === 'ending' || !!s.endingShown,
   };
+}
+
+// ---------- findings ----------
+const SEVERITIES = ['blocker', 'major', 'minor', 'polish', 'good', 'question'];
+const CATEGORIES = [
+  'crash',
+  'softlock',
+  'progression',
+  'logic',
+  'balance',
+  'ux',
+  'text',
+  'collision',
+  'performance',
+  'tooling',
+];
+// Which codebase owns the defect. Getting this wrong sends a fixer into the
+// wrong repo area, so it is a required field rather than a guess.
+const AREAS = ['game', 'harness', 'docs', 'environment'];
+
+const findings = [];
+const findingByPrint = new Map();
+
+function fingerprintOf(f) {
+  const norm = (s) =>
+    String(s ?? '')
+      .toLowerCase()
+      .replace(/\d+/g, '#')
+      .replace(/[^a-z#]+/g, ' ')
+      .trim()
+      .split(/\s+/)
+      .slice(0, 14)
+      .join(' ');
+  return crypto
+    .createHash('sha1')
+    .update([f.area, f.category, norm(f.title || f.detail)].join('|'))
+    .digest('hex')
+    .slice(0, 10);
+}
+
+function reproTrail(limit = 8) {
+  const calls = [];
+  for (let i = events.length - 1; i >= 0 && calls.length < limit; i--) {
+    const e = events[i];
+    if (e.type !== 'tool_result') continue;
+    calls.push({ tool: e.tool, args: events.find((x) => x.seq === e.seq - 1)?.args ?? null, error: e.error ?? null });
+  }
+  return calls.reverse();
+}
+
+async function captureFindingShot(index, slug) {
+  if (!page || page.isClosed()) return null;
+  const file = path.join('findings', `${String(index).padStart(2, '0')}-${slug}.png`);
+  try {
+    await page.screenshot({ path: path.join(RUN_DIR, file) });
+    return file;
+  } catch {
+    return null;
+  }
+}
+
+async function recordFinding(input) {
+  const invalid = [];
+  const pick = (value, allowed, fallback) => {
+    if (allowed.includes(value)) return value;
+    if (value !== undefined && value !== null) invalid.push(`${value}`);
+    return fallback;
+  };
+  const f = {
+    severity: pick(input.severity, SEVERITIES, 'major'),
+    category: pick(input.category, CATEGORIES, 'logic'),
+    area: pick(input.area, AREAS, 'game'),
+    title: String(input.title ?? input.detail ?? 'untitled finding').slice(0, 160),
+    expected: input.expected ? String(input.expected).slice(0, 600) : null,
+    actual: input.actual ? String(input.actual).slice(0, 600) : null,
+    detail: input.detail ? String(input.detail).slice(0, 2000) : null,
+    reproduced: input.reproduced === true,
+    source: input.source ?? 'agent',
+  };
+  const print = fingerprintOf(f);
+  const existing = findingByPrint.get(print);
+  if (existing) {
+    existing.occurrences++;
+    existing.lastSeenAt = new Date().toISOString();
+    if (f.reproduced) existing.reproduced = true;
+    logEvent('finding_repeat', { print, occurrences: existing.occurrences, title: existing.title });
+    return existing;
+  }
+
+  const slug = f.title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 40) || 'finding';
+  const record = {
+    ...f,
+    print,
+    index: findings.length + 1,
+    firstSeenAt: new Date().toISOString(),
+    lastSeenAt: new Date().toISOString(),
+    occurrences: 1,
+    invalidFields: invalid.length ? invalid : undefined,
+    repro: {
+      seed: RUN_META.seed,
+      speed,
+      runId: RUN_ID,
+      state: lastStatus ? stateSummary(lastStatus) : null,
+      recentToolCalls: reproTrail(),
+    },
+    screenshot: await captureFindingShot(findings.length + 1, slug),
+  };
+  findings.push(record);
+  findingByPrint.set(print, record);
+  if (record.severity !== 'good') stats.findings++;
+  logEvent('finding', record);
+  pushFeed(`[${record.severity}/${record.area}] ${record.title.slice(0, 70)}`);
+  return record;
 }
 
 function checkAnomalies(s) {
@@ -169,9 +307,52 @@ function checkAnomalies(s) {
     if (Number.isNaN(m.hp) || m.hp < 0) out.push(`${m.species} hp invalid: ${m.hp}`);
     if (m.hp > m.maxHp) out.push(`${m.species} hp ${m.hp} > maxHp ${m.maxHp}`);
     if (m.level < 1 || m.level > 100) out.push(`${m.species} level invalid: ${m.level}`);
+    if (Number.isNaN(m.maxHp) || m.maxHp <= 0) out.push(`${m.species} maxHp invalid: ${m.maxHp}`);
   }
   if (!KNOWN_MODES.has(s.mode)) out.push(`unknown mode: ${s.mode}`);
+  if (s.caught > s.seen) out.push(`dex caught ${s.caught} > seen ${s.seen}`);
+  if (s.storageCount < 0) out.push(`storage count negative: ${s.storageCount}`);
   return out;
+}
+
+// Mechanical text QA: leaked placeholders read as bugs to any player and cost
+// nothing to detect, so they should not depend on the model noticing.
+const BAD_TEXT = /\b(undefined|NaN|null|TODO|FIXME)\b|\[object |\{\{|\}\}/;
+const seenText = new Set();
+function checkText(s) {
+  const out = [];
+  const candidates = [
+    ['dialogue', s.dialogue],
+    ['battle message', s.battle?.message],
+    ['menu title', s.menu?.title],
+  ];
+  for (const [where, text] of candidates) {
+    if (!text || seenText.has(text)) continue;
+    seenText.add(text);
+    const m = BAD_TEXT.exec(text);
+    if (m) out.push({ where, text, marker: m[0] });
+  }
+  return out;
+}
+
+// The game loop should keep advancing frames; if wall clock moves and
+// playFrames does not, the page is hung (a crash a screenshot alone hides).
+let lastFrames = null;
+let lastFramesAt = 0;
+function checkStall(s) {
+  const now = Date.now();
+  const frames = s.playFrames;
+  if (typeof frames !== 'number') return null;
+  if (lastFrames === null || frames !== lastFrames) {
+    lastFrames = frames;
+    lastFramesAt = now;
+    return null;
+  }
+  if (s.mode !== 'overworld' && s.mode !== 'battle') return null;
+  const stalledMs = now - lastFramesAt;
+  if (stalledMs < 4000) return null;
+  lastFramesAt = now;
+  return stalledMs;
 }
 
 function detectMilestones(sum) {
@@ -193,23 +374,90 @@ function detectMilestones(sum) {
   if (curMax > prevMax && prevSummary.party.length > 0) {
     logEvent('milestone', { kind: 'level-up', from: prevMax, to: curMax });
   }
+  if (curMax < prevMax && sum.party.length >= prevSummary.party.length) {
+    autoFinding({
+      severity: 'major',
+      category: 'logic',
+      title: `party level regressed from L${prevMax} to L${curMax}`,
+      expected: 'levels never decrease during play',
+      actual: `lead levels went ${prevSummary.party.join(', ')} -> ${sum.party.join(', ')}`,
+    });
+  }
+  if (sum.badges.length < prevSummary.badges.length) {
+    autoFinding({
+      severity: 'blocker',
+      category: 'progression',
+      title: 'badge count decreased',
+      expected: 'earned badges are permanent',
+      actual: `${prevSummary.badges.join(', ')} -> ${sum.badges.join(', ')}`,
+    });
+  }
   if (sum.party.length > prevSummary.party.length) {
     logEvent('milestone', { kind: 'party-add', party: sum.party });
     pushFeed(`+++ party now ${sum.party.length}: ${sum.party.join(', ')}`);
   }
+  if (sum.objective && sum.objective !== prevSummary.objective) {
+    logEvent('milestone', { kind: 'objective', objective: sum.objective });
+    pushFeed(`>>> objective: ${sum.objective.slice(0, 90)}`);
+  }
+  if (sum.cleared && !cleared) {
+    cleared = true;
+    logEvent('milestone', { kind: 'game-cleared', state: sum });
+    pushFeed('*** GAME CLEARED - ending reached ***');
+  }
   prevSummary = sum;
+}
+
+// Detectors run on state that is already loaded, so findings from them are
+// queued and flushed after lastStatus is set (recordFinding snapshots state).
+const pendingAuto = [];
+function autoFinding(input) {
+  pendingAuto.push({ ...input, source: 'auto', reproduced: true });
+}
+
+async function flushAuto() {
+  while (pendingAuto.length) {
+    const next = pendingAuto.shift();
+    await recordFinding(next);
+  }
 }
 
 async function getState() {
   const s = await page.evaluate(() => window.__PM.state());
-  const anomalies = checkAnomalies(s);
-  for (const a of anomalies) {
+  for (const a of checkAnomalies(s)) {
     stats.anomalies++;
     logEvent('anomaly', { message: a, state: stateSummary(s) });
     pushFeed(`!! ANOMALY: ${a}`);
+    autoFinding({
+      severity: 'major',
+      category: 'logic',
+      title: `invalid game state: ${a}`,
+      expected: 'game state invariants hold at all times',
+      actual: a,
+    });
+  }
+  for (const t of checkText(s)) {
+    autoFinding({
+      severity: 'minor',
+      category: 'text',
+      title: `placeholder "${t.marker}" leaked into ${t.where}`,
+      expected: 'player-facing text contains no code placeholders',
+      actual: `${t.where}: ${t.text.slice(0, 200)}`,
+    });
+  }
+  const stalledMs = checkStall(s);
+  if (stalledMs) {
+    autoFinding({
+      severity: 'blocker',
+      category: 'performance',
+      title: 'game loop stopped advancing frames',
+      expected: 'playFrames keeps increasing while in overworld/battle',
+      actual: `playFrames stuck at ${s.playFrames} for ${Math.round(stalledMs / 1000)}s in mode ${s.mode}`,
+    });
   }
   lastStatus = s;
   detectMilestones(stateSummary(s));
+  await flushAuto();
   return s;
 }
 
@@ -244,6 +492,13 @@ function trackStuck(s, actionDesc) {
     stats.warnings++;
     logEvent('warning', { kind: 'stuck', message: `position unchanged across ${samePosStreak} actions`, lastAction: actionDesc, state: stateSummary(s) });
     pushFeed(`!! STUCK? no movement for ${samePosStreak} actions`);
+    autoFinding({
+      severity: 'major',
+      category: 'softlock',
+      title: `no movement for ${samePosStreak} consecutive actions in ${s.map}`,
+      expected: 'player actions eventually change position or mode',
+      actual: `stuck at ${s.map} (${s.x},${s.y}) in mode ${s.mode}; last action ${actionDesc}`,
+    });
   }
 }
 
@@ -353,6 +608,8 @@ async function settle(maxIter = 200) {
       } else {
         await pressKeys(['b']);
       }
+    } else if (s.mode === 'summary' || s.mode === 'dex' || s.mode === 'intro') {
+      await pressKeys(['b']);
     } else {
       return s;
     }
@@ -361,9 +618,14 @@ async function settle(maxIter = 200) {
   return getState();
 }
 
+let lastBattleMessage = null;
+let repeatedMessage = 0;
+
 async function battleLoop(opts = {}) {
   const messages = [];
   const maxIter = (opts.maxTurns ?? 60) * 12;
+  lastBattleMessage = null;
+  repeatedMessage = 0;
   // The battle object is gone by the time the loop exits, so the outcome
   // ('win' | 'lose' | 'caught' | 'run') has to be captured while it is live.
   let outcome = null;
@@ -377,6 +639,21 @@ async function battleLoop(opts = {}) {
     if (b.outcome) outcome = b.outcome;
     if (b.phase === 'msg') {
       if (b.message && messages[messages.length - 1] !== b.message) messages.push(b.message);
+      if (b.message && b.message === lastBattleMessage) {
+        repeatedMessage++;
+        if (repeatedMessage === 14) {
+          autoFinding({
+            severity: 'blocker',
+            category: 'softlock',
+            title: 'battle message repeats without advancing',
+            expected: 'pressing A advances battle messages',
+            actual: `"${String(b.message).slice(0, 120)}" repeated ${repeatedMessage} times in phase msg`,
+          });
+        }
+      } else {
+        lastBattleMessage = b.message;
+        repeatedMessage = 0;
+      }
       await pressKeys(['a']);
     } else if (b.phase === 'action') {
       await pressKeys(['a']);
@@ -414,7 +691,92 @@ async function battleLoop(opts = {}) {
   throw new Error('battleLoop did not finish; messages: ' + messages.join(' | '));
 }
 
-async function newGame(seed, starterIndex = 0, noEncounters = true) {
+// A cold start (no localStorage) plays the intro movie before the title; 'b'
+// skips it. Only the first load of an origin ever sees this.
+async function skipIntro(maxTries = 25) {
+  for (let i = 0; i < maxTries; i++) {
+    const mode = await page.evaluate(() => window.__PM.state().mode);
+    if (mode !== 'intro') return;
+    await pressKeys(['b']);
+    await page.waitForTimeout(pressDelay());
+  }
+}
+
+// Grind loop: pace back and forth over grass, auto-running every wild battle,
+// until the party lead hits targetLevel or the battle/blackout budget runs out.
+async function grind(opts = {}) {
+  const targetLevel = opts.targetLevel ?? null;
+  const maxBattles = Math.min(opts.maxBattles ?? 12, 40);
+  const preferMoves = opts.preferMoves;
+  const out = { battles: 0, wins: 0, losses: 0, caught: 0, fled: 0, blackouts: 0, levels: [], stoppedBecause: 'budget' };
+  const leadLevel = (s) => (s.party[0] ? s.party[0].level : 0);
+  let s = await getState();
+  const startLevel = leadLevel(s);
+
+  if (targetLevel !== null && startLevel >= targetLevel) {
+    out.stoppedBecause = 'already-at-target';
+    return { ...out, state: s };
+  }
+
+  const dirs = ['left', 'right', 'up', 'down'];
+  let dirIdx = 0;
+  for (let i = 0; i < maxBattles * 40; i++) {
+    s = await getState();
+    if (s.mode === 'battle') {
+      const r = await battleLoop({ preferMoves, maxTurns: opts.maxTurns ?? 40 });
+      out.battles++;
+      if (r.outcome === 'win') out.wins++;
+      else if (r.outcome === 'lose') out.losses++;
+      else if (r.outcome === 'caught') out.caught++;
+      else if (r.outcome === 'run') out.fled++;
+      s = await getState();
+      out.levels = s.party.map((m) => `${m.species} L${m.level}`);
+      if (s.party.every((m) => m.hp <= 0 || m.isEgg)) {
+        out.blackouts++;
+        out.stoppedBecause = 'blackout';
+        return { ...out, state: await settle() };
+      }
+      if (targetLevel !== null && leadLevel(s) >= targetLevel) {
+        out.stoppedBecause = 'target-level';
+        return { ...out, state: s };
+      }
+      if (out.battles >= maxBattles) {
+        out.stoppedBecause = 'max-battles';
+        return { ...out, state: s };
+      }
+      continue;
+    }
+    if (s.mode !== 'overworld') {
+      await settle();
+      continue;
+    }
+    const r = await walkTiles(dirs[dirIdx % dirs.length], 2);
+    if (r.blocked || r.walked === 0) dirIdx++;
+  }
+  out.stoppedBecause = 'step-budget';
+  return { ...out, state: await getState() };
+}
+
+// Load the game's autosave instead of starting over, so a long clear attempt
+// can span several runs.
+async function continueGame(noEncounters = false) {
+  const params = new URLSearchParams();
+  if (noEncounters) params.set('noenc', '1');
+  expectReload = true;
+  await page.goto(`http://localhost:${VITE_PORT}/?${params}`);
+  await page.waitForFunction(() => !!window.__PM);
+  if (speed !== 1) await page.evaluate((n) => window.__PM.debug.setSpeed(n), speed);
+  await skipIntro();
+  await waitMode('title');
+  const title = await page.evaluate(() => window.__PM.state().title);
+  const idx = title?.options.indexOf('CONTINUE') ?? -1;
+  if (idx < 0) throw new Error('no save found to continue from; call new-game instead');
+  await pressKeys([...Array(Math.max(0, idx - (title.index ?? 0))).fill('down'), 'a']);
+  await waitMode('overworld');
+  return getState();
+}
+
+async function newGame(seed, starterIndex = 0, noEncounters = false) {
   const params = new URLSearchParams();
   if (seed !== null && seed !== undefined) params.set('seed', String(seed));
   if (noEncounters) params.set('noenc', '1');
@@ -423,6 +785,7 @@ async function newGame(seed, starterIndex = 0, noEncounters = true) {
   await page.waitForFunction(() => !!window.__PM);
   await page.evaluate(() => window.__PM.debug.clearSave());
   if (speed !== 1) await page.evaluate((n) => window.__PM.debug.setSpeed(n), speed);
+  await skipIntro();
   await waitMode('title');
   await pressKeys(['a']);
   await waitMode('dialogue');
@@ -440,6 +803,91 @@ async function newGame(seed, starterIndex = 0, noEncounters = true) {
   await advanceDialogue();
   await waitMode('overworld');
   return getState();
+}
+
+// ---------- findings report ----------
+const SEVERITY_ORDER = { blocker: 0, major: 1, minor: 2, polish: 3, question: 4, good: 5 };
+
+function writeFindings() {
+  const sorted = [...findings].sort(
+    (a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] || a.index - b.index,
+  );
+  fs.writeFileSync(
+    path.join(RUN_DIR, 'findings.json'),
+    JSON.stringify({ runId: RUN_ID, meta: RUN_META, count: sorted.length, findings: sorted }, null, 2),
+  );
+
+  const lines = [`# Findings: ${RUN_ID}`, ''];
+  const bySeverity = SEVERITIES.map((sev) => [sev, sorted.filter((f) => f.severity === sev)]).filter(
+    ([, list]) => list.length,
+  );
+  lines.push(
+    `Total ${sorted.length} (` + bySeverity.map(([sev, list]) => `${list.length} ${sev}`).join(', ') + ')',
+  );
+  lines.push('');
+  lines.push('| # | severity | area | category | title | seen | repro |');
+  lines.push('|---|---|---|---|---|---|---|');
+  for (const f of sorted) {
+    lines.push(
+      `| ${f.index} | ${f.severity} | ${f.area} | ${f.category} | ${f.title.replace(/\|/g, '/')} | ${f.occurrences}x | ${f.reproduced ? 'confirmed' : 'once'} |`,
+    );
+  }
+
+  for (const f of sorted) {
+    lines.push('', `## ${f.index}. [${f.severity}/${f.area}/${f.category}] ${f.title}`, '');
+    if (f.expected) lines.push(`- expected: ${f.expected}`);
+    if (f.actual) lines.push(`- actual: ${f.actual}`);
+    lines.push(`- source: ${f.source} | occurrences: ${f.occurrences} | reproduced: ${f.reproduced}`);
+    lines.push(`- fingerprint: \`${f.print}\``);
+    if (f.screenshot) lines.push(`- screenshot: \`${f.screenshot}\``);
+    if (f.detail) lines.push('', f.detail);
+    const r = f.repro;
+    if (r) {
+      lines.push('', '<details><summary>repro context</summary>', '');
+      lines.push('```');
+      lines.push(`seed: ${r.seed ?? 'random'} | speed: ${r.speed}x`);
+      if (r.state) lines.push(`state: ${r.state.mode} @ ${r.state.map} (${r.state.x},${r.state.y}) money ${r.state.money} badges ${r.state.badges.length}`);
+      if (r.state?.party?.length) lines.push(`party: ${r.state.party.join(', ')}`);
+      if (r.state?.objective) lines.push(`objective: ${r.state.objective}`);
+      lines.push('preceding tool calls:');
+      for (const c of r.recentToolCalls ?? []) {
+        lines.push(`  ${c.tool}(${JSON.stringify(c.args ?? {})})${c.error ? ` -> ERROR ${c.error}` : ''}`);
+      }
+      lines.push('```');
+      lines.push('', '</details>');
+    }
+  }
+  fs.writeFileSync(path.join(RUN_DIR, 'findings.md'), lines.join('\n'));
+  return sorted;
+}
+
+// Cross-run rollup so a fingerprint seen in several runs is obviously the same
+// defect rather than N separate tickets.
+function updateFindingsIndex() {
+  const indexPath = path.join(REPO_ROOT, 'agent-runs', 'findings-index.json');
+  let index;
+  try {
+    index = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
+  } catch {
+    index = {};
+  }
+  for (const f of findings) {
+    const entry = index[f.print] ?? {
+      print: f.print,
+      severity: f.severity,
+      area: f.area,
+      category: f.category,
+      title: f.title,
+      runs: [],
+      totalOccurrences: 0,
+    };
+    if (!entry.runs.includes(RUN_ID)) entry.runs.push(RUN_ID);
+    entry.totalOccurrences += f.occurrences;
+    entry.lastSeenAt = f.lastSeenAt;
+    index[f.print] = entry;
+  }
+  fs.writeFileSync(indexPath, JSON.stringify(index, null, 2));
+  return index;
 }
 
 // ---------- report ----------
@@ -461,8 +909,10 @@ function buildReport(status, summary, usage) {
     milestones,
     anomalies,
     warnings,
+    findings: writeFindings(),
     agentNotes: agentNotes.map((e) => e.text),
   };
+  updateFindingsIndex();
   fs.writeFileSync(path.join(RUN_DIR, 'report.json'), JSON.stringify(report, null, 2));
 
   const lines = [];
@@ -497,9 +947,17 @@ function buildReport(status, summary, usage) {
       lines.push(`- [${m.ts.slice(11, 19)}] ${m.kind}: ${m.kind === 'map-change' ? `${m.from} -> ${m.to}` : JSON.stringify({ ...m, seq: undefined, ts: undefined, type: undefined, kind: undefined })}`);
     }
   }
+  if (report.findings.length) {
+    lines.push('');
+    lines.push('## Findings');
+    lines.push(`See findings.md for full repro context and screenshots.`);
+    for (const f of report.findings) {
+      lines.push(`- [${f.severity}/${f.area}/${f.category}] ${f.title}${f.occurrences > 1 ? ` (${f.occurrences}x)` : ''}`);
+    }
+  }
   if (agentNotes.length) {
     lines.push('');
-    lines.push('## Agent Observations');
+    lines.push('## Free-form Notes');
     for (const n of agentNotes) lines.push(`- [${n.ts.slice(11, 19)}] ${n.text}`);
   }
   if (anomalies.length) {
@@ -534,11 +992,30 @@ async function waitForVite(timeoutMs = 45000) {
     }
     await new Promise((r) => setTimeout(r, 400));
   }
-  throw new Error(`vite dev server did not come up on port ${VITE_PORT}`);
+  throw new Error(`vite ${FROZEN ? 'preview' : 'dev'} server did not come up on port ${VITE_PORT}`);
+}
+
+function buildOnce() {
+  return new Promise((resolve, reject) => {
+    const p = spawn('npx', ['vite', 'build'], { cwd: REPO_ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
+    let err = '';
+    p.stderr.on('data', (d) => (err += String(d)));
+    p.stdout.on('data', () => {});
+    p.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`vite build failed (${code}): ${err.slice(-600)}`))));
+  });
 }
 
 async function boot() {
-  viteProc = spawn('npx', ['vite', '--port', String(VITE_PORT), '--strictPort'], {
+  // A dev server reloads the page whenever anyone edits src/, which wipes the
+  // agent's progress mid-run. Serving a build freezes the game for the run.
+  if (FROZEN) {
+    logEvent('build_start', {});
+    await buildOnce();
+  }
+  const viteArgs = FROZEN
+    ? ['vite', 'preview', '--port', String(VITE_PORT), '--strictPort']
+    : ['vite', '--port', String(VITE_PORT), '--strictPort'];
+  viteProc = spawn('npx', viteArgs, {
     cwd: REPO_ROOT,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -690,10 +1167,27 @@ const server = http.createServer(async (req, res) => {
   const route = `${req.method} ${url.pathname}`;
   try {
     if (route === 'GET /api/health') {
-      return json(res, 200, { ok: true, runId: RUN_ID, pageOpen: !!page && !page.isClosed(), events: seq, speed });
+      return json(res, 200, { ok: true, runId: RUN_ID, pageOpen: !!page && !page.isClosed(), events: seq, speed, cleared });
     }
     if (route === 'GET /api/run-info') {
-      return json(res, 200, { ok: true, meta: RUN_META, stats, runDir: RUN_DIR });
+      return json(res, 200, {
+        ok: true,
+        meta: RUN_META,
+        stats,
+        runDir: RUN_DIR,
+        cleared,
+        digest: lastStatus ? stateSummary(lastStatus) : null,
+        milestones: events.filter((e) => e.type === 'milestone').slice(-8),
+        findings: findings.map((f) => ({
+          index: f.index,
+          severity: f.severity,
+          area: f.area,
+          category: f.category,
+          title: f.title,
+          occurrences: f.occurrences,
+          reproduced: f.reproduced,
+        })),
+      });
     }
     if (route === 'GET /api/state') {
       const s = await withPageLock(async () => {
@@ -743,8 +1237,18 @@ const server = http.createServer(async (req, res) => {
       }
       case 'POST /api/new-game': {
         const out = await recordTool('new-game', body, async () => ({
-          state: await newGame(body.seed ?? RUN_META.seed, Number(body.starterIndex ?? 0), body.noEncounters !== false),
+          state: await newGame(body.seed ?? RUN_META.seed, Number(body.starterIndex ?? 0), body.noEncounters === true),
         }));
+        return json(res, out.ok ? 200 : 500, out);
+      }
+      case 'POST /api/continue': {
+        const out = await recordTool('continue', body, async () => ({
+          state: await continueGame(body.noEncounters === true),
+        }));
+        return json(res, out.ok ? 200 : 500, out);
+      }
+      case 'POST /api/grind': {
+        const out = await recordTool('grind', body, async () => grind(body));
         return json(res, out.ok ? 200 : 500, out);
       }
       case 'POST /api/debug': {
@@ -772,6 +1276,30 @@ const server = http.createServer(async (req, res) => {
         await updateOverlay();
         return json(res, 200, { ok: true });
       }
+      case 'POST /api/finding': {
+        const record = await withPageLock(() => recordFinding(body));
+        agentNote = `[${record.severity}/${record.area}] ${record.title}`;
+        await updateOverlay();
+        return json(res, 200, {
+          ok: true,
+          finding: {
+            index: record.index,
+            print: record.print,
+            severity: record.severity,
+            category: record.category,
+            area: record.area,
+            occurrences: record.occurrences,
+            screenshot: record.screenshot,
+            duplicate: record.occurrences > 1,
+          },
+          hint:
+            record.occurrences > 1
+              ? 'Already filed earlier in this run; occurrence count incremented instead of creating a duplicate.'
+              : 'Filed with a screenshot and the preceding tool calls attached.',
+          allowed: { severity: SEVERITIES, category: CATEGORIES, area: AREAS },
+          invalidFields: record.invalidFields ?? null,
+        });
+      }
       case 'POST /api/log-event': {
         const type = String(body.type ?? 'agent_event').replace(/[^a-z_]/g, '');
         const data = { ...body };
@@ -793,7 +1321,18 @@ const server = http.createServer(async (req, res) => {
         }
         const report = buildReport(String(body.status ?? 'completed'), body.summary, body.usage);
         logEvent('run_end', { status: body.status ?? 'completed' });
-        return json(res, 200, { ok: true, report: { anomalies: report.anomalies.length, warnings: report.warnings.length }, runDir: RUN_DIR });
+        return json(res, 200, {
+          ok: true,
+          report: { anomalies: report.anomalies.length, warnings: report.warnings.length },
+          findings: report.findings.map((f) => ({
+            severity: f.severity,
+            area: f.area,
+            category: f.category,
+            title: f.title,
+            occurrences: f.occurrences,
+          })),
+          runDir: RUN_DIR,
+        });
       }
       default:
         return json(res, 404, { ok: false, error: 'not found' });

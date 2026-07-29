@@ -126,12 +126,114 @@ test('concurrent tool calls are serialized and report consistent positions', asy
   expect(after.raw.moving).toBe(false);
 });
 
+// Full-clear runs depend on these: the story objective to know where to go,
+// pm_grind to level up cheaply, and continue-from-save to span sessions.
+test('state exposes objective and inventory, grind levels up, continue resumes a save', async () => {
+  test.setTimeout(240_000);
+
+  const s0 = await api('/api/state');
+  expect(typeof s0.state.objective).toBe('string');
+  expect(s0.state.objective.length).toBeGreaterThan(0);
+  expect(s0.state.inventory).toBeTruthy();
+  expect(s0.state.healPoint).toBeTruthy();
+  expect(s0.state.cleared).toBe(false);
+
+  const warp = await api('/api/debug', { action: 'warp', args: ['route1', 4, 3] });
+  expect(warp.ok).toBe(true);
+  const levelBefore = Number(/L(\d+)/.exec((await api('/api/state')).state.party[0])![1]);
+
+  const g = await api('/api/grind', { targetLevel: levelBefore + 1, maxBattles: 6 });
+  expect(g.ok).toBe(true);
+  expect(g.battles).toBeGreaterThan(0);
+  expect(['target-level', 'max-battles', 'blackout', 'step-budget']).toContain(g.stoppedBecause);
+
+  // save through the pause menu, then reload and continue from the autosave
+  // (a grind can end in a blackout, so wait for the overworld before opening it)
+  await api('/api/wait', { mode: 'overworld', timeoutMs: 30_000 });
+  await api('/api/press', { keys: ['start'] });
+  await api('/api/wait', { mode: 'menu', timeoutMs: 10_000 });
+  const menu = await api('/api/state');
+  const saveIdx = menu.raw.menu.items.indexOf('SAVE');
+  expect(saveIdx).toBeGreaterThanOrEqual(0);
+  await api('/api/press', { keys: [...Array(saveIdx).fill('down'), 'a'] });
+  await api('/api/wait', { mode: 'dialogue', timeoutMs: 10_000 });
+  await api('/api/press', { keys: ['a'] });
+  await api('/api/wait', { mode: 'overworld', timeoutMs: 10_000 });
+
+  const cont = await api('/api/continue', {});
+  expect(cont.ok).toBe(true);
+  expect(cont.state.mode).toBe('overworld');
+  expect(cont.state.party.length).toBeGreaterThan(0);
+});
+
+// Findings are the product of a debugging run, so their schema, evidence
+// capture and deduplication are contract-level behavior.
+test('findings: validation, evidence capture, dedupe, and auto-detection', async () => {
+  test.setTimeout(120_000);
+
+  const filed = await api('/api/finding', {
+    title: 'walking left from the lab door reports blocked but the player moves',
+    severity: 'major',
+    category: 'logic',
+    area: 'harness',
+    expected: 'walk result matches pm_state',
+    actual: 'walk said blocked:true while state showed x-1',
+    detail: 'hypothesis: results are not serialized',
+    reproduced: true,
+  });
+  expect(filed.ok).toBe(true);
+  expect(filed.finding.severity).toBe('major');
+  expect(filed.finding.area).toBe('harness');
+  expect(filed.finding.duplicate).toBe(false);
+  expect(filed.finding.screenshot).toMatch(/^findings\/01-.*\.png$/);
+  expect(fs.existsSync(path.join(RUN_DIR, filed.finding.screenshot))).toBe(true);
+
+  // same issue again -> merged, not a second entry
+  const again = await api('/api/finding', {
+    title: 'Walking LEFT from the lab door reports blocked but the player moves!!',
+    severity: 'major',
+    category: 'logic',
+    area: 'harness',
+    expected: 'walk result matches pm_state',
+    actual: 'same as before',
+  });
+  expect(again.finding.duplicate).toBe(true);
+  expect(again.finding.occurrences).toBe(2);
+  expect(again.finding.print).toBe(filed.finding.print);
+
+  // invalid enum values fall back instead of throwing away the report
+  const sloppy = await api('/api/finding', {
+    title: 'professor gives no dialogue when talked to twice',
+    severity: 'CRITICAL!!',
+    category: 'weirdness',
+    area: 'gameplay',
+    expected: 'some dialogue',
+    actual: 'nothing happened',
+  });
+  expect(sloppy.ok).toBe(true);
+  expect(sloppy.finding.severity).toBe('major');
+  expect(sloppy.finding.category).toBe('logic');
+  expect(sloppy.finding.area).toBe('game');
+  expect(sloppy.invalidFields).toContain('CRITICAL!!');
+
+  // mechanical detector floor: a level regression is caught without the agent
+  const before = (await api('/api/state')).state.party[0];
+  const level = Number(/L(\d+)/.exec(before)![1]);
+  await api('/api/debug', { action: 'setPartyLevels', args: [Math.max(2, level - 2)] });
+  await api('/api/state');
+  const info = await api('/api/run-info');
+  const auto = info.findings.find((f: any) => f.category === 'logic' && /level regressed/.test(f.title));
+  expect(auto, 'level regression should be detected automatically').toBeTruthy();
+  expect(auto.severity).toBe('major');
+});
+
 test('map endpoint, battle loop, notes, finalize and artifacts', async () => {
   test.setTimeout(180_000);
 
+  const here = await api('/api/state');
   const map = await api('/api/map');
   expect(map.ok).toBe(true);
-  expect(map.map.id).toBe('lab');
+  expect(map.map.id).toBe(here.state.map);
   expect(map.map.tiles.length).toBeGreaterThan(0);
   expect(map.map.player).toBeTruthy();
 
@@ -170,6 +272,27 @@ test('map endpoint, battle loop, notes, finalize and artifacts', async () => {
   expect(fs.existsSync(path.join(RUN_DIR, 'report.json'))).toBe(true);
   expect(fs.existsSync(path.join(RUN_DIR, 'report.md'))).toBe(true);
   expect(fs.existsSync(path.join(RUN_DIR, 'final.png'))).toBe(true);
+  expect(fs.existsSync(path.join(RUN_DIR, 'findings.md'))).toBe(true);
+  expect(fs.existsSync(path.join(RUN_DIR, 'findings.json'))).toBe(true);
+
+  const findings = JSON.parse(fs.readFileSync(path.join(RUN_DIR, 'findings.json'), 'utf8'));
+  expect(findings.findings.length).toBeGreaterThanOrEqual(3);
+  // blockers/majors sort above minor severities
+  const severities: string[] = findings.findings.map((f: any) => f.severity);
+  const rank = ['blocker', 'major', 'minor', 'polish', 'question', 'good'];
+  for (let i = 1; i < severities.length; i++) {
+    expect(rank.indexOf(severities[i])).toBeGreaterThanOrEqual(rank.indexOf(severities[i - 1]));
+  }
+  const withRepro = findings.findings.find((f: any) => f.repro?.recentToolCalls?.length);
+  expect(withRepro, 'findings should carry a tool-call trail').toBeTruthy();
+  expect(withRepro.repro.seed).toBe(42);
+
+  const fmd = fs.readFileSync(path.join(RUN_DIR, 'findings.md'), 'utf8');
+  expect(fmd).toContain('| # | severity | area | category |');
+  expect(fmd).toContain('repro context');
+
+  const index = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'agent-runs', 'findings-index.json'), 'utf8'));
+  expect(Object.values(index).some((e: any) => e.runs.includes(RUN_ID))).toBe(true);
 
   const lines = fs
     .readFileSync(path.join(RUN_DIR, 'events.jsonl'), 'utf8')
@@ -192,7 +315,8 @@ test('map endpoint, battle loop, notes, finalize and artifacts', async () => {
 
   const md = fs.readFileSync(path.join(RUN_DIR, 'report.md'), 'utf8');
   expect(md).toContain('# Agent Run Report');
-  expect(md).toContain('## Agent Observations');
+  expect(md).toContain('## Findings');
+  expect(md).toContain('## Free-form Notes');
 });
 
 // Minimal stdio JSON-RPC client to validate the MCP server end to end.

@@ -1,4 +1,5 @@
 # Tooling
+Active contributors: KeigoShimadaCC
 
 ## Purpose
 
@@ -32,6 +33,7 @@ From `eslint.config.js`:
 
 - Vitest for unit tests (`npm test`), scoped to `tests/unit/**/*.test.ts`.
 - Playwright for end-to-end tests (`npm run test:e2e`), scoped to `tests/*.spec.ts`.
+- Content validator (`npm run validate:content`) via `tools/validate-content.ts`.
 - Playwright auto-starts the dev server using `npm run dev`.
 
 See [Testing](testing.md) for test authoring and helper patterns.
@@ -49,6 +51,19 @@ See [Testing](testing.md) for test authoring and helper patterns.
 - Deterministic, verbose single-fight tracer.
 - Run: `npx tsx tools/debugfight.ts`
 - Useful for turn-order, damage, and outcome debugging.
+
+### `tools/validate-content.ts`
+
+- Validates map/content wiring through `validateMaps()` in `src/content/validate`.
+- Run: `npm run validate:content`
+- Fails fast on content errors before PR.
+
+### `tools/agent/`
+
+- Agent harness for autonomous exploratory runs (`agent:play`) and standalone runtime server (`agent:server`).
+- Core files: `player.mjs`, `pm-server.mjs`, `pm-mcp.mjs`, `profiles.json`.
+- Produces per-run artifacts in `agent-runs/<id>/`.
+- See [Agent harness](agent-harness.md).
 
 ### `tools/diag-rocco.mjs`
 
@@ -69,3 +84,4 @@ The repository keeps generated game screenshots in `docs/`. Use `tools/screensho
 
 - [Balance simulation](../background/balance-simulation.md)
 - [Testing](testing.md)
+- [Agent harness](agent-harness.md)

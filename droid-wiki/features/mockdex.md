@@ -1,15 +1,15 @@
 # MockDex
-Active contributors: Keigo
+Active contributors: KeigoShimadaCC
 
 ## Purpose
-Document dex tracking and rendering behavior from `renderDex()` in `src/game.ts` plus species ordering from `src/data/species.ts`.
+Document dex tracking and rendering behavior from `renderDex()` in `src/game.ts`, plus species ordering and count exports from `src/data/species.ts`.
 
 ## Core data and limits
 - Dex mode is `mode = 'dex'`.
 - Render function is `renderDex()`.
-- Ordered species list comes from `DEX_ORDER`.
-- Total species count comes from `DEX_COUNT` (26).
-- UI header displays `Seen X/26` and `Caught Y/26`.
+- Ordered species list comes from `DEX_ORDER` in `src/data/species.ts`.
+- Total species count comes from `DEX_COUNT` in `src/data/species.ts` (currently `41`).
+- UI header displays `Seen X/<DEX_ORDER.length>` and `Caught Y/<DEX_ORDER.length>` in `renderDex()` (`src/game.ts`).
 
 ## Seen and caught tracking
 Tracked sets:
@@ -40,6 +40,12 @@ This produces a two-stage discovery model:
 1. encounter reveals identity,
 2. capture unlocks full entry text.
 
+## Dex milestone rewards
+- Quest content includes a `dex_milestones` side quest (10/20/30/40 seen-species milestones) in `src/content/quests.ts`.
+- Post-game Maple rewards are delivered through `maple_postgame` script flags (`dexReward10`, `dexReward20`, `dexReward30`, `dexReward40`) in `src/content/scripts/index.ts`.
+- The Maple reward script grants `luckycharm` (10), `powerband` (20), and `safetysash` (30), then caps with completion dialogue at 40 in `src/content/scripts/index.ts`.
+
 ## Related pages
 - [Catching](catching.md)
 - [Species primitive](../primitives/species.md)
+- [Quests](quests.md)

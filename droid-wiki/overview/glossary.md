@@ -12,6 +12,16 @@ Project-specific terms and domain vocabulary used across the codebase and this w
 - **Mock Mart** — the shop.
 - **Starter** — the first creature, chosen from Prof. Maple: Sproutle, Cindercub, or Puddlefin.
 
+## Story and world lore
+
+- **Mocca region** — the game's setting, an eight-town league route ending at Null Peak.
+- **The Ledger** — the region's stone record of every Mockemon ever catalogued. The central conceit of the plot.
+- **Team Rollback** — the antagonist faction, led by Director Nil, trying to revert the region to its "first draft."
+- **Originon** — the first entry in the Ledger, a legendary Mockemon that stirs at Null Peak. A post-game encounter.
+- **Gym leader** — one of eight bosses (Terra, Weave, Nerin, Dyna, Fern, Pyra, Aeris, Mira), each guarding a badge and a type.
+- **Badge** — proof of a gym win. Eight exist (Boulder, Silk, Tide, Surge, Bloom, Ember, Gale, Dream); badge count sets the level cap (`badgeCap`).
+- **Champion** — rival Kai, the final battle at Summit Null after Victory Trail.
+
 ## Stats and growth
 
 - **Base stats** — the species-level `StatBlock` (hp, atk, def, spa, spd, spe) that all individuals of a species share.
@@ -42,15 +52,32 @@ Project-specific terms and domain vocabulary used across the codebase and this w
 
 - **Tile** — a single map cell. Maps are arrays of strings; each character is a tile type (see [`SOLID_TILES`](../primitives/world-map.md)).
 - **Warp** — a tile that teleports the player to another map and position.
+- **Gate** — a tile that is solid until its `flag` is set; opened by a button or badge.
+- **Button** — a tile that sets (or toggles) a flag when pressed, opening the gates that watch it.
+- **One-way** — a tile enterable only while moving in a set direction (gym 2 silk threads).
+- **Pad** — an in-map teleport pad pair (gym 8).
+- **Shallow water (`~`)** — crossable only once the Tide Badge is earned (`BADGE_FLAG_SHALLOW`).
 - **Line of sight** — a trainer's forward-facing detection range (`sight` tiles) that triggers a battle.
 - **Encounter table** — the weighted list of wild species for a map, with optional night weights.
-- **Flag** — a boolean in `game.flags` recording story progress (e.g. `starterChosen`, `rivalBeaten`, `gymDone`).
+- **Flag** — a boolean in `game.flags` recording story progress (e.g. `starterChosen`, `badge_boulder`, `gotBalls`).
 - **Heal point** — the map and coordinates the player respawns at after a whiteout.
 - **Daycare** — the breeding building where two compatible creatures can produce an egg.
+
+## Quests, scripts, and cutscenes
+
+- **Quest** — a `QuestDef` in [`src/content/quests.ts`](../features/quests.md) with ordered stages, tracked by the `QuestLog` in `src/quests.ts`.
+- **Objective** — the current stage's one-line goal, surfaced on the overworld and in the journal.
+- **Journal** — the accumulated per-stage log lines for a quest.
+- **Script** — a `ScriptCmd[]` cutscene/dialogue program in [`src/content/scripts/index.ts`](../systems/scripting.md), run by the `ScriptRunner`.
+- **ScriptHost** — the interface (implemented by `Game`) that scripts call to say lines, start battles, give items, warp, and update quests.
+- **Sequence** — a frame-based animation timeline (`src/sequence.ts`) built from steps like `tween`, `fade`, `pan`, and `typeText`.
+- **Save slot** — one of three save files (`pm_save`, `pm_save_2`, `pm_save_3`); slot 1 keeps the original key for backward compatibility.
 
 ## Engineering
 
 - **`window.__PM`** — the debug and end-to-end testing API installed by `main.ts`, exposing game state and scripted actions.
+- **`speed`** — the loop fast-forward multiplier used by tests and the agent harness.
 - **Seed** — the RNG seed. Fixing it (`?seed=N`) makes a run reproducible.
 - **PlayerAction** — the tagged union a battle turn accepts: `move`, `switch`, `item`, or `run`.
 - **Mode** — the `Game` state-machine field selecting the active update/render path.
+- **Agent harness** — the [Codex-driven play-tester](../how-to-contribute/agent-harness.md) that plays the live game through an MCP bridge, with personality profiles.

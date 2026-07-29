@@ -1,65 +1,48 @@
 # Lore
 
-## Timeline of the one-day build
+## Timeline
 
-All commits in this repository are dated `2026-07-28`, so the timeline below uses commit order within that day.
+### 2026-07-28: Scaffolding and core data
 
-## Scaffolding and core data (2026-07-28, commits 1-2)
+1. **2026-07-28 (`147ee42`)**: Vite + TypeScript scaffolding.
+2. **2026-07-28 (`e5e095e`)**: core data and art foundations (types, moves, 20-species roster, original sprites).
 
-1. **Commit 1 (`147ee42`)**: Vite + TypeScript scaffolding.
-2. **Commit 2 (`e5e095e`)**: core game data and art foundations land together:
-   - type chart and type utilities
-   - move data
-   - 20-species roster
-   - original sprites
+### 2026-07-28: First playable v1
 
-`src/data/types.ts` and `src/rng.ts` start in this early phase and have remained unchanged since then.
+3. **2026-07-28 (`31a273d`)**: first battle engine, stat/EXP flow, and world maps with NPC/trainers.
+4. **2026-07-28 (`8840786`)**: full game loop (overworld, dialogue, menus, battles, shop, save, ending) plus e2e debug API.
+5. **2026-07-28 (`5ec3451`)**: Playwright e2e suite for core flow.
+6. **2026-07-28 (`793cc2d`)**: warp/path fixes and full-playthrough e2e pass.
+7. **2026-07-28 (`b0141dd`)**: README screenshots and usage docs.
+8. **2026-07-28 (`cc84809`)**: controls-bar UX and simulator-driven difficulty retune.
 
-## First playable v1 (2026-07-28, commits 3-8)
+### 2026-07-28: Engine v2 and integration
 
-3. **Commit 3 (`31a273d`)**: first battle engine, stat/EXP flow, and world maps with NPC/trainers.
-4. **Commit 4 (`8840786`)**: full playable loop (overworld, dialogue, menus, battles, shop, save, ending) plus the e2e debug API.
-5. **Commit 5 (`5ec3451`)**: Playwright e2e suite for core game flow.
-6. **Commit 6 (`793cc2d`)**: route/warp fixes and full-playthrough e2e pass.
-7. **Commit 7 (`b0141dd`)**: README documentation with screenshots.
-8. **Commit 8 (`cc84809`)**: controls-bar UX and simulator-driven balance retune.
+9. **2026-07-28 (`eda77f6`)**: engine v2 rewrite (natures/IVs/EVs, abilities, held items, weather/terrain/screens/hazards, breeding/evolution methods, day/night, EXP share, AI tiers).
+10. **2026-07-28 (`e44adab`)**: v2 gameplay integration (daycare loop, trade + stone evolutions, MockDex, PC storage, day/night presentation, whiteout penalty, move-forget flow).
 
-## Engine v2 rewrite (2026-07-28, commit 9)
+### 2026-07-28: Hardening and pre-expansion test wall
 
-9. **Commit 9 (`eda77f6`)** is the major rewrite point:
-   - stat model upgrade to nature + IV + EV
-   - abilities and held items
-   - weather, terrain, screens, hazards
-   - breeding and evolution-method support
-   - day/night handling, EXP share, AI tiers, struggle handling
+11. **2026-07-28 (`f3ea51a`)**: rebalance pass after simulator runs.
+12. **2026-07-28 (`d7904b3`)**: 42 adversarial battle unit tests.
+13. **2026-07-28 (`22858ee`)**: 11 e2e system tests and lint cleanup.
+14. **2026-07-28 (`c550c8b`)**: 16 adversarial review fixes.
+15. **2026-07-28 (`84b923d`)**: docs polish with refreshed screenshot.
+16. **2026-07-28 (`da27477`)**: 17 e2e coverage tests for battle mechanics, evolutions, held items, and day/night.
 
-This commit heavily expands battle internals:
-- `src/battle.ts`: `+808 / -127`
-- `src/mockemon.ts`: `+209 / -32`
+### 2026-07-29: The agent harness
 
-The v1 simple stat progression is effectively replaced by the IV/EV/nature system from this point onward.
+17. **2026-07-29 (`cfebed8`)**: adds the AI play-testing harness and supporting wiki/debug hooks (`tools/agent/pm-server.mjs`, `pm-mcp.mjs`, `player.mjs`, `profiles.json`).
+18. **2026-07-29 (`7bee198`)**: harness stability fixes for page-op serialization and battle/walk reporting.
 
-## v2 game integration (2026-07-28, commit 10)
+### 2026-07-29: The content expansion
 
-10. **Commit 10 (`e44adab`)** wires engine v2 features into game flow:
-   - daycare and egg loop
-   - NPC trade and stone evolutions
-   - held-item interactions in moment-to-moment play
-   - MockDex and PC storage
-   - day/night clock and tints
-   - whiteout money penalty and move-forget prompts
+19. **2026-07-29 (`9d2b671`)**: phase 0 infrastructure (quests, scripts, timelines, content validator).
+20. **2026-07-29 (`0fb3ec3`)**: phases 1-3 content and frontend expansion (species, gyms, maps, scripts, intro/credits flows, save-slot support).
+21. **2026-07-29 (`f56efa4`)**: trainer-ID correction pass for story scripts.
+22. **2026-07-29 (`ec13adf`)**: post-game additions, including Originon encounter and dex rewards.
+23. **2026-07-29 (`ac873f7`)**: scenario gap fill (Juno beats, villain flow, Kai encounters, quest wiring).
 
-## Hardening and release polish (2026-07-28, commits 11-15)
+## What changed in practice
 
-11. **Commit 11 (`f3ea51a`)**: rebalance pass using simulator feedback.
-12. **Commit 12 (`d7904b3`)**: 42 adversarial battle unit tests.
-13. **Commit 13 (`22858ee`)**: 11 e2e system tests and lint cleanup.
-14. **Commit 14 (`c550c8b`)**: 16 adversarial-review fixes.
-15. **Commit 15 (`84b923d`)**: lab screenshot refresh for v2 docs.
-
-## Growth trajectory
-
-- Species count starts at 20 in commit 2 and reaches 26 by `HEAD`.
-- The project keeps early data foundations (`types.ts`, `rng.ts`) while replacing core combat math and progression logic during v2.
-
-Related docs: [how-to-contribute/tooling.md](how-to-contribute/tooling.md), [background/balance-simulation.md](background/balance-simulation.md).
+The repository moved from a single-gym demo into a full 8-gym campaign in two days. The largest shift on 2026-07-29 is the new `src/content/` layer: multi-act map bundles, quest state progression, scripted cutscenes, and post-game beats around the Ledger, Team Rollback, Originon at Null Peak, and Champion Kai.

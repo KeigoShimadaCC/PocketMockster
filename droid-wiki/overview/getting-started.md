@@ -7,7 +7,7 @@ This page covers prerequisites, install, running the game, and the build and tes
 - Node.js with npm (the project targets modern Node; any current LTS works).
 - A browser with HTML5 canvas support to play.
 
-The project has no runtime dependencies. Everything in `package.json` is a dev dependency: Vite, TypeScript, ESLint, Vitest, Playwright, and tsx.
+The project has no runtime dependencies. Everything in `package.json` is a dev dependency: Vite, TypeScript, ESLint, Vitest, Playwright, tsx, and (for the [agent harness](../how-to-contribute/agent-harness.md)) the MCP SDK and Codex SDK.
 
 ## Install and run
 
@@ -34,9 +34,11 @@ Key mapping is defined in [`src/input.ts`](../systems/input.md).
 The game reads two query parameters at boot in `src/main.ts`:
 
 - `?seed=N` seeds the RNG so runs are deterministic.
-- `?noenc=1` disables wild encounters.
+- `?noenc=1` disables wild encounters (and skips the intro movie).
 
 Example: `http://localhost:5173/?seed=777&noenc=1`.
+
+On first boot (no prior save, encounters enabled) `main.ts` plays the intro movie. The title screen then offers three save slots. See [Cutscenes](../systems/cutscenes.md) and [Persistence](../systems/persistence.md).
 
 ## Scripts
 
@@ -51,6 +53,9 @@ All scripts are defined in `package.json`.
 | `npm run lint` | Run ESLint across the project |
 | `npm run test` | Run the Vitest unit suite (`tests/unit/**`) |
 | `npm run test:e2e` | Run the Playwright end-to-end suite |
+| `npm run validate:content` | Type-check the content layer (maps, gyms, trainers, quests, scripts) with `tools/validate-content.ts` |
+| `npm run agent:server` | Start the agent play-testing server (`tools/agent/pm-server.mjs`) |
+| `npm run agent:play` | Run a Codex agent that plays the game live (`tools/agent/player.mjs`) |
 
 ## Building for release
 
@@ -60,9 +65,10 @@ All scripts are defined in `package.json`.
 
 A good reading order for a newcomer:
 
-1. [`src/main.ts`](../systems/game-loop.md) to see the loop and the `__PM` API.
-2. [`src/game.ts`](../systems/overworld.md) `update()` and `render()` to see the mode switch.
+1. [`src/main.ts`](../systems/game-loop.md) to see the loop, the `speed` multiplier, and the `__PM` API.
+2. [`src/game.ts`](../systems/overworld.md) `update()` and `render()` to see the mode switch and how it implements `ScriptHost`.
 3. [`src/battle.ts`](../systems/battle-engine/index.md) `takeTurn()` for combat.
-4. [`src/data/species.ts`](../reference/data-models.md) to see how a creature is described.
+4. [`src/content/`](../systems/content-pipeline.md) to see how maps, gyms, quests, and cutscenes are described.
+5. [`src/data/species.ts`](../reference/data-models.md) to see how a creature is described.
 
 For conventions used throughout, read [Patterns and conventions](../how-to-contribute/patterns-and-conventions.md).

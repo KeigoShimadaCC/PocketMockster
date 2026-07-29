@@ -34,7 +34,7 @@ server.registerTool(
   'pm_new_game',
   {
     description:
-      'Start a fresh game: clears the save, skips intro dialogue, talks to the professor and picks a starter. Ends in the overworld of the lab with the starter in party. Call this first.',
+      'Start a fresh game: clears the save, skips intro dialogue, talks to the professor and picks a starter. Ends in the overworld of the lab with the starter in party, wild encounters enabled. Call this first (or pm_continue to resume a save).',
     inputSchema: {
       seed: z.number().int().optional().describe('RNG seed for reproducibility'),
       starterIndex: z.number().int().min(0).max(2).optional().describe('0 = sproutle (grass, default), 1 = cindercub (fire), 2 = puddlefin (water)'),
@@ -108,6 +108,30 @@ server.registerTool(
 );
 
 server.registerTool(
+  'pm_grind',
+  {
+    description:
+      'Level up efficiently: paces over grass and auto-runs every wild battle until the lead reaches targetLevel or the battle budget is spent. Stand on or next to a grass tile first (see pm_map, "G"). Returns battles/wins/losses, resulting levels, and stoppedBecause ("target-level" | "max-battles" | "blackout" | "step-budget"). Far cheaper than looping pm_walk yourself.',
+    inputSchema: {
+      targetLevel: z.number().int().min(2).max(100).optional().describe('stop once the lead mon reaches this level'),
+      maxBattles: z.number().int().min(1).max(40).optional().describe('battle budget, default 12'),
+      preferMoves: z.array(z.string()).optional().describe('move ids to prefer while battling'),
+    },
+  },
+  async ({ targetLevel, maxBattles, preferMoves }) => textResult(await call('/api/grind', { targetLevel, maxBattles, preferMoves })),
+);
+
+server.registerTool(
+  'pm_continue',
+  {
+    description:
+      'Resume the game from its autosave (title screen -> CONTINUE) instead of starting over. Use this when a previous session left progress behind; it fails if no save exists.',
+    inputSchema: {},
+  },
+  async () => textResult(await call('/api/continue', {})),
+);
+
+server.registerTool(
   'pm_set_speed',
   {
     description: 'Set game speed multiplier (0.25-20). Higher = faster animations/timers. Use high speed (4-8) for grinding/traversal, low speed (1-2) for precision menus.',
@@ -127,10 +151,40 @@ server.registerTool(
 );
 
 server.registerTool(
+  'pm_report_finding',
+  {
+    description: [
+      'File a structured finding that a developer can act on without asking you follow-up questions.',
+      'The server automatically attaches a screenshot, the current game state, the seed, and your preceding tool calls, so do not restate those.',
+      '',
+      'area (which codebase owns it) - choose carefully, a wrong area sends the fix to the wrong files:',
+      '- game: the RPG itself (rules, maps, dialogue, battle math, progression, balance)',
+      '- harness: the pm_* tools you are calling (wrong/stale tool results, automation that plays badly, tool errors). pm_battle uses a FIXED scripted policy, it is NOT the game AI, so complaints about move choice during pm_battle are harness, not game.',
+      '- docs: a tool description or documented contract disagrees with real behavior',
+      '- environment: the page reloaded, the server restarted, playwright errors like "execution context was destroyed" - infrastructure, not the game',
+      '',
+      'severity: blocker (cannot progress / crash / data loss), major (wrong behavior with a workaround), minor, polish, good (praise worth keeping), question (behavior you cannot classify without design intent - use this instead of guessing "bug").',
+      'Filing the same issue twice is fine: identical findings are deduplicated into one entry with an occurrence count.',
+    ].join('\n'),
+    inputSchema: {
+      title: z.string().describe('one line, specific: "walking left from (8,9) in mapletown reports blocked but moves"'),
+      severity: z.enum(['blocker', 'major', 'minor', 'polish', 'good', 'question']),
+      category: z.enum(['crash', 'softlock', 'progression', 'logic', 'balance', 'ux', 'text', 'collision', 'performance', 'tooling']),
+      area: z.enum(['game', 'harness', 'docs', 'environment']),
+      expected: z.string().describe('what should have happened'),
+      actual: z.string().describe('what actually happened, with concrete values'),
+      detail: z.string().optional().describe('extra analysis: your hypothesis about the cause, what you ruled out, exact steps if unusual'),
+      reproduced: z.boolean().optional().describe('true only if you deliberately repeated the steps and saw it again'),
+    },
+  },
+  async (input) => textResult(await call('/api/finding', input)),
+);
+
+server.registerTool(
   'pm_report_note',
   {
     description:
-      'Record an observation in the run report. Use this whenever you notice a bug, odd behavior, confusing UX, or anything worth telling the developers. Include what you did, what you expected, and what happened.',
+      'Record a free-form observation that is not a finding (progress commentary, context for later). For anything a developer should fix, use pm_report_finding instead.',
     inputSchema: { text: z.string() },
   },
   async ({ text }) => textResult(await call('/api/overlay-note', { note: text })),

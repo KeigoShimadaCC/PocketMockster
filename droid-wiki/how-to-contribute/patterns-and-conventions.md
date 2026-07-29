@@ -13,7 +13,7 @@ ESLint uses the recommended JS and typescript-eslint rule sets with two local tw
 
 ## Data as plain records
 
-All static game content is a flat array of typed objects that gets indexed into a `Record` by key. This pattern repeats in every `src/data/` file and in `maps.ts`:
+All static game content is a flat array of typed objects that gets indexed into a `Record` by key. This pattern repeats in every `src/data/` file and across `src/content/`:
 
 ```ts
 const list: MoveDef[] = [ /* ... */ ];
@@ -21,6 +21,14 @@ export const MOVES: Record<string, MoveDef> = Object.fromEntries(list.map((m) =>
 ```
 
 To add content you append to the `list` and the lookup map updates automatically. Optional fields on the def interfaces gate behavior: a move with a `weather` field sets weather, a species with an `evolution` field can evolve, and so on. Prefer adding an optional field over branching on a name.
+
+## Content lives in its own layer, engine consumes it
+
+The `src/data/` and `src/content/` layers hold pure data; the `src/*.ts` engine modules hold behavior. `src/maps.ts` is now a thin re-export shim over [`src/content/maps/`](../systems/content-pipeline.md). Maps are split into per-act bundles and aggregated in `content/maps/index.ts`; `content/trainers.ts` and `content/encounters.ts` derive their lookups from the maps. When you add a town, gym, quest, or cutscene, put the data under `src/content/` and let the engine pick it up. Run `npm run validate:content` to catch dangling references (missing warps, unknown species, orphaned scripts).
+
+## Story runs on data-driven scripts, not code branches
+
+Cutscenes and NPC dialogue are `ScriptCmd[]` programs in [`src/content/scripts/index.ts`](../systems/scripting.md), interpreted by the `ScriptRunner` in `src/script.ts`. `Game implements ScriptHost`, so scripts drive dialogue, choices, battles, item grants, warps, and quest updates without touching engine code. Prefer authoring a new script over hard-coding a story beat in `game.ts`. Quests are `QuestDef` records in `content/quests.ts` tracked by the `QuestLog` in `src/quests.ts`; advance them from scripts (`questStart`/`questAdvance`/`questComplete`).
 
 ## Template vs instance
 
@@ -53,7 +61,7 @@ interface MenuState {
 
 ## Rendering is immediate mode
 
-Every frame repaints from scratch. Drawing helpers are small free functions at the bottom of `game.ts`: `text`, `panel`, `hpBar`, `wrap`, `paginate`, plus `drawSprite` from `sprites.ts`. Tiles are drawn procedurally by character in `drawTile`. There is no retained UI state to keep in sync; if you can compute it, draw it.
+Every frame repaints from scratch. Shared drawing helpers now live in [`src/ui.ts`](../systems/rendering.md): `text`, `panel`, `hpBar`, `wrap`, `paginate`, and `formatPlaytime`, plus `drawSprite` from `sprites.ts`. Tiles are drawn procedurally by character in `drawTile`. There is no retained UI state to keep in sync; if you can compute it, draw it. Timed animation (the intro movie, credits, fades) is built from frame-based steps in [`src/sequence.ts`](../systems/cutscenes.md) rather than wall-clock timers.
 
 ## Coordinates and tiles
 

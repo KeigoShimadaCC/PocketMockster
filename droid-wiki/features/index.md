@@ -1,5 +1,5 @@
 # Features
-Active contributors: Keigo
+Active contributors: KeigoShimadaCC
 
 ## Purpose
 This section documents player-facing gameplay capabilities implemented across `src/game.ts`, `src/battle.ts`, and supporting systems.
@@ -7,7 +7,8 @@ This section documents player-facing gameplay capabilities implemented across `s
 ## Feature pages
 | Feature | Summary |
 | --- | --- |
-| [Story progression](story-progression.md) | Walks through the demo arc from starter selection to the Verdant Gym ending trigger. |
+| [Story progression](story-progression.md) | Covers the full arc from starter choice through 8 gyms, Team Rollback at Null Peak, Champion Kai, credits, and post-game. |
+| [Quests](quests.md) | Documents quest data, `QuestLog` runtime behavior, scripted progression hooks, and quest journal/objective UI. |
 | [Catching](catching.md) | Explains how MockBall capture works, including the exact catch and shake checks. |
 | [Breeding](breeding.md) | Covers daycare compatibility, egg generation, inheritance, and hatch timing. |
 | [Evolution](evolution.md) | Describes level, friendship, stone, and trade evolution triggers and call sites. |

@@ -1,8 +1,8 @@
 # Overworld
-Active contributors: Keigo
+Active contributors: KeigoShimadaCC
 
 ## Purpose
-Document overworld movement, blocking, interaction, step-triggered events, and related dialogue and menu state.
+Document overworld movement, blocking, interaction, scripted map events, and related menu and dialogue state.
 
 ## Movement in `updateOverworld`
 `Game.updateOverworld()` in `src/game.ts` handles movement in two phases:
@@ -23,8 +23,12 @@ Document overworld movement, blocking, interaction, step-triggered events, and r
 
 ## Blocking rules in `isBlocked`
 `isBlocked(x, y)` checks:
-- Tile solidity using `SOLID_TILES` from `src/maps.ts`.
+- Tile solidity using `SOLID_TILES` re-exported by `src/maps.ts` from `src/content/types.ts`.
 - Exception: if tile is a warp door (`map.warps` contains that position), it is walkable.
+- Shallow water (`SHALLOW_TILE`, `~`) is blocked until `flags[BADGE_FLAG_SHALLOW]` is true (`badge_tide`).
+- Lava tiles (`x`) are blocked while `lavaHot()` is true; heat toggles by `map.lavaPeriod`.
+- Closed gates from `map.gates` block until their flag is opened.
+- One-way tiles from `map.oneWay` block entry when approach direction does not match `oneWay.dir`.
 - NPC occupancy: visible NPCs (`npcVisible`) block their tile.
 
 ## Step completion flow in `onStepComplete`
@@ -34,22 +38,31 @@ Document overworld movement, blocking, interaction, step-triggered events, and r
 flowchart TD
   A[Step complete] --> B{Warp tile?}
   B -- starter gate block --> C[Push player back + dialogue]
-  B -- normal warp --> D[Switch map and coords]
-  B -- no warp --> E{Ground item here?}
-  E -- yes --> F[Collect item + inventory + dialogue]
-  E -- no --> G{Any egg hatches?}
-  G -- yes --> H[Mark seen/caught + hatch dialogue]
-  G -- no --> I[Daycare breeding progress tick]
-  I --> J{Rival ambush condition?}
-  J -- yes --> K[Start rival battle]
-  J -- no --> L{Trainer line of sight?}
-  L -- yes --> M[Start trainer battle]
-  L -- no --> N{Grass encounter roll?}
-  N -- yes --> O[Start wild battle]
+  B -- normal warp --> D[Switch map and coords then fire onEnter script event]
+  B -- no warp --> E{Pad at tile?}
+  E -- yes --> F[Teleport to pad target]
+  E -- no --> G{Wind tile # and windDir?}
+  G -- yes --> H[Forced step in windDir]
+  G -- no --> I{Scripted map event on this tile?}
+  I -- yes --> J[Run event script]
+  I -- no --> K{Ground item here?}
+  K -- yes --> L[Collect item + dialogue]
+  K -- no --> M{Any egg hatches?}
+  M -- yes --> N[Hatch dialogue]
+  M -- no --> O[Daycare breeding tick]
+  O --> P{Rival ambush condition?}
+  P -- yes --> Q[Start rival battle]
+  P -- no --> R{Trainer line of sight?}
+  R -- yes --> S[Start trainer battle]
+  R -- no --> T{Grass encounter roll?}
+  T -- yes --> U[Start wild battle]
 ```
 
 Specific checks include:
-- Warp transitions, including Maple Town to Route 1 starter gate lock before `starterChosen`.
+- Warp transitions, including Maple Town to Route 1 starter lock before `starterChosen`, plus `onEnter` script hooks.
+- Teleport pads from `map.pads`.
+- Wind push tiles (`#`) using `map.windDir`.
+- Tile-bound scripted events from `map.events`.
 - Ground item pickup from `map.items`.
 - Party egg ticking (`tickEgg`).
 - Daycare breeding step counter and egg generation every 256 valid steps.
@@ -74,13 +87,19 @@ Interaction target order:
 `talkTo(npc)` routes by trainer status and `npc.action`:
 - Trainer battle start if trainer exists and not yet defeated.
 - `starter` -> starter selection dialogue and menu.
-- `heal` -> center healing flow and heal point update.
 - `shop` -> mart shop menu.
-- `giveballs` -> one-time item grant using `gotBalls` flag.
 - `gymleader` -> badge-dependent dialogue.
 - `daycare` -> daycare dialogue and daycare menu stack.
 - `trade` -> NPC trade flow.
 - Default -> plain `npc.dialogue`.
+
+If `npc.script` exists, it takes precedence and runs through `runScript` before action/dialogue dispatch (`src/game.ts`, `src/content/types.ts`).
+
+## Interactive map devices
+`interact()` also handles map devices from content definitions:
+- Buttons (`map.buttons`): pressing A toggles or sets the flag (`toggle === false` means set-only), then shows feedback text.
+- Gates (`map.gates`): closed gates can display gate-specific blocker text.
+- Signs and locked doors: still read from `map.signs` and `map.lockedDoors`.
 
 ## Dialogue and menu state
 From `src/game.ts`:
@@ -89,6 +108,8 @@ From `src/game.ts`:
 - `openMenu(m, push)` supports nested menus via `menuStack`.
 - `closeMenu()` pops previous menu or returns to `overworld`.
 - `closeAllMenus()` clears all menu state and returns to `overworld`.
+
+The start menu now includes a dedicated `QUESTS` entry, and `openQuestMenu()` renders active and completed quest journal lines from `QuestLog` (`src/game.ts`, `src/quests.ts`).
 
 ## Overworld rendering
 `renderOverworld()`:
@@ -101,15 +122,21 @@ From `src/game.ts`:
 
 Then `renderTint()` applies outdoor day/night overlay.
 
+Map data now comes from the content layer through `MAPS` (`src/content/maps/index.ts`) and the `src/maps.ts` re-export shim.
+
 Related pages:
 - [Story progression](../features/story-progression.md)
 - [Day-night cycle](../features/day-night-cycle.md)
 - [World map](../primitives/world-map.md)
+- [Scripting](scripting.md)
+- [Content pipeline](content-pipeline.md)
 
 ## Key source files
 | File | Role |
 | --- | --- |
 | `src/game.ts` | Overworld update logic, interactions, menus, and rendering. |
-| `src/maps.ts` | Map topology, warps, NPCs, items, encounters, and `SOLID_TILES`. |
+| `src/content/types.ts` | Map content types: gates, buttons, one-way tiles, pads, events, and tile constants. |
+| `src/content/maps/index.ts` | Aggregates authored map modules into runtime `MAPS`. |
+| `src/maps.ts` | Thin compatibility re-export for `MAPS` and tile constants. |
 | `src/input.ts` | Press and held input APIs consumed by `updateOverworld()`. |
 | `src/daynight.ts` | Time formatting and day phase used in overworld HUD and tinting. |

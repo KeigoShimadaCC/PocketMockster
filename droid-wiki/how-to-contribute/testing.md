@@ -1,4 +1,5 @@
 # Testing
+Active contributors: KeigoShimadaCC
 
 ## Purpose
 
@@ -10,26 +11,33 @@ This repository has two separate suites:
 
 - Unit tests with Vitest, configured in `vitest.config.ts` to include only `tests/unit/**/*.test.ts`.
 - End-to-end tests with Playwright, configured in `playwright.config.ts` to run `tests/*.spec.ts` with a local dev server.
+- Content validation gate with `npm run validate:content` (`tools/validate-content.ts` → `src/content/validate`).
 
 ## Running tests
 
 - Unit tests: `npm test`
 - End-to-end tests: `npm run test:e2e`
-- Full local gate: `npm run lint && npm run typecheck && npm test && npm run test:e2e`
+- Content validation: `npm run validate:content`
+- Full local gate: `npm run lint && npm run typecheck && npm test && npm run test:e2e && npm run validate:content`
 
 ## What each suite covers
 
 ### Unit tests (Vitest)
 
-Unit tests in `tests/unit/` directly import battle, mockemon, and data modules. They include focused behavioral coverage such as:
+Unit tests in `tests/unit/` cover battle logic, content, quest/story state, scripting, and sequence timing. Current files:
 
-- `battle.test.ts` with extensive adversarial battle cases
+- `battle.test.ts`
 - `breeding.test.ts`
+- `content.test.ts`
 - `data.test.ts`
 - `daynight.test.ts`
 - `evolution.test.ts`
 - `growth.test.ts`
 - `mockemon.test.ts`
+- `quests.test.ts`
+- `roster.test.ts`
+- `script.test.ts`
+- `sequence.test.ts`
 - `stats.test.ts`
 
 These tests use seeded RNG to keep outcomes reproducible.
@@ -38,12 +46,23 @@ These tests use seeded RNG to keep outcomes reproducible.
 
 End-to-end tests in `tests/` drive the running game and assert full-system behavior:
 
+- `agent.spec.ts`
+- `coverage.spec.ts`
+- `journey.spec.ts`
 - `smoke.spec.ts`
 - `mechanics.spec.ts`
+- `story.spec.ts`
 - `systems.spec.ts`
-- `journey.spec.ts`
 
-They cover full flows such as new game progression, battles, map traversal, persistence, and key system interactions.
+They cover full flows such as new game progression, scripted story paths, map traversal, persistence, and agent-harness infrastructure (`tests/agent.spec.ts` validates `tools/agent/pm-server.mjs` + `tools/agent/pm-mcp.mjs`).
+
+## Content validator as a release gate
+
+`npm run validate:content` runs `tools/validate-content.ts`, which calls `validateMaps()` from `src/content/validate` and exits non-zero when content errors are present.
+
+Use this for any change touching maps, warps, NPC scripts, story progression, or quest wiring in `src/content/`.
+
+See [Development workflow](development-workflow.md) for where this sits in pre-PR checks.
 
 ## Determinism and seeds
 
@@ -84,6 +103,14 @@ Common debug helpers:
 - `newGameWithStarter(page, seed, starterIndex?)`: scripted setup from title to overworld with selected starter.
 
 See also [Debugging](debugging.md) and [Tooling](tooling.md).
+
+## Agent harness as exploratory testing
+
+`tools/agent/player.mjs` can run profile-driven autonomous playthroughs through the MCP bridge and capture structured artifacts in `agent-runs/<id>/`.
+
+Use this for exploratory coverage (unexpected interactions, confusing UX, soft-lock probes) that complements deterministic unit/e2e assertions.
+
+See [Agent harness](agent-harness.md).
 
 ## Writing a new unit test
 

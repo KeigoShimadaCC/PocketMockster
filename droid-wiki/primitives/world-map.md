@@ -1,76 +1,70 @@
 # World map
-Active contributors: Keigo
+Active contributors: KeigoShimadaCC
 
 ## Purpose
-Define the overworld map data model, including tile layouts, warps, NPC scripts, encounter tables, and map-level interaction metadata.
+Define the overworld map primitive used by movement, collision, events, NPC interactions, warps, and wild encounters.
 
 ## Definition
-Defined in `src/maps.ts`.
+The source-of-truth types now live in `src/content/types.ts`, while `src/maps.ts` is a compatibility re-export shim to `src/content/*`.
 
 ### `GameMap`
-- `id`, `name`
-- `tiles: string[]`
-- `warps: Warp[]`
-- `npcs: Npc[]`
-- `items: GroundItem[]`
-- `encounters: EncounterEntry[]`
-- `encounterRate`
-- `signs`
-- `lockedDoors`
-- `indoor`
+`GameMap` in `src/content/types.ts` contains:
+
+- Core identity/layout: `id`, `name`, `tiles`, `indoor`
+- Navigation: `warps`, `lockedDoors`, optional `gates`, optional `oneWay`, optional `pads`
+- Actors/interactions: `npcs`, `signs`, `items`
+- Encounter model: `encounters`, `encounterRate`
+- Script hooks: optional `events`, optional `onEnter`
+- Puzzle/environment toggles: optional `buttons`, optional `windDir`, optional `lavaPeriod`
 
 ### Supporting types
 - `Warp`: `x`, `y`, `to`, `tx`, `ty`
-- `Npc`:
-  - Base fields: `id`, `x`, `y`, `spriteKey`, `facing`, `dialogue`
-  - Optional `action`: `heal` | `shop` | `giveballs` | `starter` | `gymleader` | `daycare` | `trade`
-  - Optional `trainer: NpcTrainer`
-  - Optional `hiddenUntilFlag`, `hiddenAfterFlag`
-- `NpcTrainer`:
-  - `id`, `name`, `spriteKey`
-  - `party` (`species`, `level`)
-  - `prize`, `introText`, `defeatText`
-  - `sight`
-  - Optional AI tier `ai`: `basic` | `smart` | `leader`
-  - Optional `potions`
+- `Gate`: `x`, `y`, `flag`, optional `text` (solid until `flag` is set)
+- `Button`: `x`, `y`, `flag`, optional `toggle`, optional `text` (sets/toggles a flag)
+- `OneWay`: `x`, `y`, `dir` (tile only enterable while moving in `dir`)
+- `Pad`: `x`, `y`, `tx`, `ty` (in-map teleport pair)
+- `MapEvent`: `x`, `y`, `script`, optional `once` flag
 - `GroundItem`: `id`, `x`, `y`, `item`, `count`
 - `EncounterEntry`: `species`, `minLv`, `maxLv`, `weight`, optional `nightWeight`
+- `Npc`: base fields plus optional `action`, `script`, `trainer`, `hiddenUntilFlag`, `hiddenAfterFlag`
+- `NpcTrainer`: `party`, `prize`, `sight`, optional `ai` tier (`basic`/`smart`/`leader`), optional `potions`
 
-## Collision and tile legend
-- `SOLID_TILES` is `new Set(['T', 'W', 'B', 'R', 'D', 'w', 'C', 'S', 'o', 'f', 'P'])`.
-- Tile character legend used in map strings:
-  - `T` tree
-  - `W` water
-  - `B` window
-  - `R` roof
-  - `D` door
-  - `w` wall
-  - `C` counter
-  - `S` sign or tree marker
-  - `o` rock
-  - `f` furniture/blocking marker
-  - `P` starter table
-  - `G` tall grass
-  - `,` path
-  - `.` grass/open walkable ground
-  - `F` floor
-  - `M` map transition mat
+## Tile model and collision
+`SOLID_TILES` is `new Set(['T', 'W', 'B', 'R', 'D', 'w', 'C', 'S', 'o', 'P'])`.  
+`SHALLOW_TILE` is `~` and `BADGE_FLAG_SHALLOW` is `badge_tide`.
 
-## Maps in code
-`MAPS` currently defines 7 maps:
-
-| Map ID | Name | Purpose |
+| Tile(s) | Meaning in gameplay | Source |
 | --- | --- | --- |
-| `mapletown` | Maple Town | Start town hub with daycare, trade NPC, and early story NPCs |
-| `lab` | Prof. Maple's Lab | Starter selection and rival intro |
-| `route1` | Route 1 | Wild encounters, item pickups, and trainer battles |
-| `verdantcity` | Verdant City | City hub linking center, mart, and gym |
-| `center` | Mock Center | Team healing via nurse action |
-| `mart` | Mock Mart | Item shop via clerk action |
-| `gym` | Verdant Gym | Gym trainers and leader Terra encounter |
+| `T W B R D w C S o P` | Always blocking unless special logic applies (for example, warp doors) | `src/content/types.ts`, `src/game.ts` |
+| `~` | Shallow water; blocked until Tide Badge flag (`badge_tide`) is set | `src/content/types.ts`, `src/game.ts` |
+| `#` | Wind tile; pushes player one step in `map.windDir` after movement resolves | `src/game.ts` |
+| `x` | Lava tile; blocked while lava is “hot”, toggled by `map.lavaPeriod` | `src/game.ts` |
+| `G` | Wild encounter tile, sampled via `encounterRate` + `encounters` | `src/game.ts` |
+
+## Map authoring and aggregation
+Maps are authored as modular files under `src/content/maps/`, then merged in `src/content/maps/index.ts` into a single `MAPS` registry (base maps + `ACT2_MAPS` ... `ACT10_MAPS`).
+
+```text
+src/content/maps/
+  index.ts
+  mapletown.ts
+  lab.ts
+  route1.ts
+  verdantcity.ts
+  center.ts
+  mart.ts
+  gym.ts
+  act2.ts ... act10.ts
+  (53 .ts files total in this folder)
+```
+
+Related content modules:
+
+- `src/content/trainers.ts` derives a global trainer dictionary by scanning `MAPS` NPC trainers, then merges script-only trainers.
+- `src/content/encounters.ts` defines shared encounter tables used by map files (for example `route1Encounters`).
 
 ## Related pages
 - [Primitives index](./index.md)
-- [Overworld system](../systems/overworld.md)
-- [Day/night cycle](../features/day-night-cycle.md)
-- [Data models reference](../reference/data-models.md)
+- [Content pipeline](../systems/content-pipeline.md)
+- [Overworld](../systems/overworld.md)
+- [Scripting](../systems/scripting.md)

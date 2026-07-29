@@ -1,8 +1,8 @@
 # Rendering
-Active contributors: Keigo
+Active contributors: KeigoShimadaCC
 
 ## Purpose
-Describe how Pocket Mockster draws each frame with canvas 2D, sprites, tiles, and time-of-day tinting.
+Describe how Pocket Mockster draws each frame with canvas 2D, sprites, tiles, shared UI helpers, and overlay sequences.
 
 ## Immediate-mode canvas rendering
 Rendering is immediate-mode in `src/game.ts`:
@@ -17,13 +17,15 @@ Layout constants in `src/game.ts`:
 - `BAR_H = 32`
 
 ## Per-mode render paths
-`render()` dispatches by `Game.mode`:
+`render()` dispatches by `Game.mode` in `src/game.ts`:
 - `renderTitle()`
 - `renderOverworld()` and `renderTint()` for overworld-family modes
 - `renderBattle()`
 - `renderSummary()`
 - `renderDex()`
 - `renderEnding()`
+- `intro?.render(...)` for boot movie overlay mode
+- `credits?.render(...)` for end credits mode
 - `renderDialogue()` overlay when mode is `dialogue`
 - `renderMenu()` overlay when mode is `menu`
 - `renderControlsBar()` always
@@ -46,7 +48,7 @@ Layout constants in `src/game.ts`:
 - Buildings and objects: `R`, `B`, `D`, `S`, `w`, `F`, `C`, `M`, `P`, `o`
 - Unknown defaults to dark fill.
 
-Map character grids come from `src/maps.ts`.
+Map character grids come from `MAPS` content modules (`src/content/maps/index.ts`) via `src/maps.ts`.
 
 ## Day and night tint overlay
 `renderTint()` in `src/game.ts`:
@@ -55,18 +57,33 @@ Map character grids come from `src/maps.ts`.
 - Gets overlay with `tintFor(phase)` from `src/daynight.ts`.
 - Applies full-screen alpha color fill on gameplay viewport.
 
-## Drawing helpers
-Bottom-of-file helpers in `src/game.ts`:
+## Drawing helpers in `src/ui.ts`
+Shared UI primitives were extracted from `src/game.ts` into `src/ui.ts`:
 - `text(...)`
 - `panel(...)`
 - `hpBar(...)`
 - `wrap(...)`
 - `paginate(...)`
+- `formatPlaytime(...)`
+
+`src/game.ts` and `src/frontend.ts` both import from `src/ui.ts`.
+
+## Intro and credits overlays
+Sequence-driven overlays render on top of the same canvas:
+- `IntroMovie` handles boot scenes.
+- `CreditsRoll` handles post-champion credits.
+
+Both are updated and rendered by `Game` mode handlers (`src/game.ts`) and are built on the frame-sequence utilities in `src/sequence.ts` through `src/frontend.ts`.
+
+Related page: [Cutscenes and sequences](cutscenes.md).
 
 ## Key source files
 | File | Role |
 | --- | --- |
-| `src/game.ts` | Main render dispatcher, mode renderers, tile rendering, tint pass, draw helpers. |
+| `src/game.ts` | Main render dispatcher, mode renderers, tile rendering, tint pass, overlays. |
+| `src/ui.ts` | Shared text/panel/hp bar/wrap/paginate/playtime helpers used by runtime and frontend overlays. |
+| `src/frontend.ts` | Intro and credits overlay rendering. |
+| `src/sequence.ts` | Timeline primitives that drive intro and credits animation steps. |
 | `src/sprites.ts` | Sprite definitions and sprite blitting utilities. |
 | `src/daynight.ts` | Phase and tint values used by the tint overlay. |
-| `src/maps.ts` | Character tile maps that drive `drawTile()`. |
+| `src/maps.ts` | Re-exported map/tile access used by `drawTile()`. |

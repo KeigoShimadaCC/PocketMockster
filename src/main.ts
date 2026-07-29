@@ -52,6 +52,7 @@ window.__PM = {
     return {
       mode: game.mode,
       speed,
+      title: game.mode === 'title' ? { options: game.titleOptions(), index: game.titleIndex } : null,
       slot: game.slot,
       playFrames: game.playFrames,
       map: game.mapId,

@@ -1,4 +1,5 @@
 # Debugging
+Active contributors: KeigoShimadaCC
 
 ## Purpose
 
@@ -17,24 +18,29 @@ Example: `http://localhost:5173/?seed=1234&noenc=1`
 
 Use `window.__PM.state()` in the browser console or in Playwright to get a full snapshot, including:
 
-- Top-level mode and location: `mode`, `map`, `x`, `y`, `moving`, `facing`
+- Top-level mode and runtime: `mode`, `speed`, `playFrames`
+- Save/session state: `title`, `slot`
+- Location and motion: `map`, `x`, `y`, `moving`, `facing`
 - Progress and economy: `money`, `badges`, `flags`, `inventory`
-- Team and storage: `party`, `storageCount`, `storage`
+- Team and storage: `party` (including `exp`, `expNext`, `shiny`), `storageCount`, `storage`
 - Time and phase: `minute`, `phase`
 - Daycare state: `daycare`, `daycareEgg`
 - UI state: `dialogue`, `menu`
 - Battle state: `battle.phase`, `battle.message`, `battle.outcome`, sides and HP
-- Collection and progression: `seen`, `caught`, `defeated`, `endingShown`
+- Quest state: `objective`, `activeQuests`, `completedQuests`, `questStages`
+- Progression collections: `seen`, `caught`, `defeated`, `endingShown`
+- Recovery location: `healPoint`
 
 ## Use `window.__PM.debug.*` helpers
 
 Core helpers for setup and reproduction:
 
-- Travel and encounter setup: `warp`, `noEncounters`, `setSeed`
-- Party setup: `setPartyLevels`, `givemon`, `setHeldItem`, `setHp`, `addExp`, `setFriendship`
+- Travel and encounter setup: `warp`, `mapInfo`, `noEncounters`, `setSeed`, `setSpeed`, `rollEncounters`
+- Story/script setup: `runScript`
+- Party setup: `setPartyLevels`, `givemon`, `setHeldItem`, `setHp`, `setEnemyHp`, `addExp`, `setFriendship`
 - Inventory and resources: `addItem`, `healAll`, `drainPP`
 - Time and breeding: `setTime`, `depositDaycare`, `walk`, `hatchEggs`
-- Cleanup: `clearInput`, `clearSave`
+- Cleanup: `clearInput`, `clearSave` (clears all save-slot keys)
 
 These helpers let you build minimal repro states quickly.
 
@@ -48,7 +54,7 @@ Use `tools/debugfight.ts` for a verbose, deterministic single-fight trace:
 
 ## Common issue: stale local save
 
-If behavior does not match expected startup state, a stale `pm_save` in `localStorage` is often the cause.
+If behavior does not match expected startup state, stale local save slots are a common cause.
 
 Fix by clearing it:
 

@@ -4,3 +4,4 @@ test-results
 agent-runs
 playwright-report
 .DS_Store
+.factory

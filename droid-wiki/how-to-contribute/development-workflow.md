@@ -1,4 +1,5 @@
 # Development workflow
+Active contributors: KeigoShimadaCC
 
 ## Purpose
 
@@ -31,6 +32,7 @@ Run checks in this order:
 2. `npm run typecheck`
 3. `npm test`
 4. `npm run test:e2e`
+5. `npm run validate:content`
 
 If a check fails, fix the issue and rerun that check before continuing.
 
@@ -53,6 +55,6 @@ Examples:
 
 ## Data-first content additions
 
-Most game content is data-driven. When adding species, moves, items, maps, or trainers, append entries to the relevant `list` in `src/data/*` and let the exported lookup records derive from that list.
+Most game content is data-driven. New maps, quests, cutscene/script data, and story progression entries should be added under `src/content/`. Species, moves, and items still live in `src/data/*`.
 
-This keeps new content consistent with existing loading and indexing patterns.
+After content edits, run `npm run validate:content` to catch reference and wiring issues before PR.

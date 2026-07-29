@@ -1,23 +1,30 @@
 # Fun facts
 
-## Five verified facts
+## Verified bits of Pocket Mockster trivia
 
-1. **It was built in one day.**  
-   `git log --reverse` shows 15 commits, and every one is dated `2026-07-28`.
+1. **`src/game.ts` is now the giant.**  
+   It is the longest TypeScript/module file in the repo at **2,546 LOC** (`wc -l` across `src`, `tests`, and `tools`).
 
-2. **Buzzler is tuned to concert A.**  
-   In `src/data/species.ts`, Buzzler's dex text says:  
-   `"A beetle that buzzes at exactly 440 Hz. Musicians tune their instruments to it."`
+2. **The villain faction talks like a version-control team on purpose.**  
+   Team Rollback dialogue is full of VCS language like “first draft,” “merge branches,” “merge conflict,” and “force-push” (`src/content/maps/lavatube.ts`, `src/content/scripts/index.ts`).
 
-3. **There is a headless campaign simulator for balance tuning.**  
-   `tools/simulate.ts` sets `TRIALS = 400` and loops over 3 starters × 3 wild-fight counts (9 configs total).  
-   Commit `f3ea51a` records that this loop was used to retune Cindercub to a 92-98% badge rate.
+3. **Grunt battle barks are written as patch notes.**  
+   `src/content/trainers.ts` includes lines like:
+   - `Grunt: v2.1: Added roadblock to Verdant Woods. Expect resistance!`
+   - `Grunt: Patch note: challenger defeated roadblock. Filing retreat.`
 
-4. **The browser runtime exposes a full debug API on `window.__PM`.**  
-   `src/main.ts` defines `window.__PM` with helpers like `warp`, `setPartyLevels`, `addItem`, and `setTime`.  
-   Playwright specs call it directly across journey/mechanics/systems tests.
+4. **Originon is literally framed as “the first entry.”**  
+   The story and presentation both anchor this joke:
+   - Credits line in `src/frontend.ts`: `Originon           the first entry`
+   - Story line in `src/content/scripts/index.ts`: “The first Mockemon ever recorded in the Ledger...”
 
-5. **The project is both clean and bot-tagged in commit history.**  
-   `rg "TODO|FIXME|HACK" src` returns no matches, and all 15 of 15 commits include a `Co-authored-by: factory-droid[bot]` trailer.
+5. **The AI play-tester has personalities, not just one bot.**  
+   `tools/agent/profiles.json` defines `casual-kid`, `speedrunner`, and `qa-adversary`, each with different speed/effort/debug behavior.
 
-Related docs: [how-to-contribute/tooling.md](how-to-contribute/tooling.md), [background/balance-simulation.md](background/balance-simulation.md).
+6. **The credits explicitly call out the build gates.**  
+   `src/frontend.ts` credits include:
+   - `Region design      Droid`
+   - `Battle engine      Droid`
+   - `Mockemon roster    Droid`
+   - `Scenario           Droid`
+   - `Quality gates      tsc, vitest, playwright`

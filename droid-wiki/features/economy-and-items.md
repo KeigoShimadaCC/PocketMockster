@@ -1,5 +1,5 @@
 # Economy and items
-Active contributors: Keigo
+Active contributors: KeigoShimadaCC
 
 ## Purpose
 Summarize player money flow and item usage paths implemented in `src/game.ts` and item definitions in `src/data/items.ts`.
@@ -44,7 +44,7 @@ The Maple Town old man (`giveballs`) grants a one-time starter bundle:
 - flag set: `gotBalls`
 
 ## Item catalog overview
-From `src/data/items.ts`:
+`src/data/items.ts` currently defines 16 item ids in `ITEMS`:
 - Medicine: Potion, Super Potion
 - Ball: MockBall
 - Evolution stones: Thunder Stone, Water Stone, Moon Stone
@@ -56,6 +56,17 @@ From `src/data/items.ts`:
   - Turn-order utility (Swift Feather)
   - EXP utility (Lucky Charm)
   - Type-boost charms (Ember, Tide, Leaf)
+
+## Quest reward items in the current content set
+Quest reward metadata in `src/content/quests.ts` and quest payout wiring in `Game.questComplete()` (`src/game.ts`) include:
+- `moonstone` (`lost_nibbit`)
+- `swiftfeather` (`contest`, `sky_feather`)
+- `luckycharm` (`daycare_egg`)
+- `tidecharm` (`lighthouse`)
+- `powerband` (`gauntlet`)
+- `sitrusberry` (`berries`, count 3)
+- `safetysash` (`observatory_ghost`)
+- `leftovers` (`dex_milestones`)
 
 In-battle item resolution details live in battle engine documentation.
 

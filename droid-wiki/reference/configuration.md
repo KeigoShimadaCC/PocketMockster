@@ -1,9 +1,25 @@
 # Configuration
 
+Active contributors: KeigoShimadaCC
+
+## NPM scripts (`package.json`)
+
+- `dev`: Vite dev server
+- `build`: `tsc && vite build`
+- `preview`: Vite preview server
+- `typecheck`: `tsc --noEmit`
+- `test`: `vitest run`
+- `test:e2e`: `playwright test`
+- `lint`: `eslint .`
+- `agent:server`: starts the local MCP bridge (`tools/agent/pm-server.mjs`)
+- `agent:play`: runs the scripted player harness (`tools/agent/player.mjs`)
+- `validate:content`: runs content validation (`tools/validate-content.ts`) through `tsx`
+
 ## Runtime parameters and persistence
 
 - URL param `seed`: parsed in `src/main.ts`, then passed to `setSeed(parseInt(seed, 10))`.
 - URL param `noenc=1`: sets `game.noEncounters = true` in `src/main.ts`.
+- Intro boot behavior: `src/main.ts` calls `game.playIntro()` when `introSeen()` is false and `noenc` is not set. Intro state is tracked via `INTRO_SEEN_KEY = 'pm_intro_seen'` and persisted by `markIntroSeen()` in `src/frontend.ts`.
 - Save key: `localStorage['pm_save']` (checked by `Game.hasSave`, written by `Game.save`, read by `Game.load`).
 
 `Game.save()` in `src/game.ts` persists this schema:
