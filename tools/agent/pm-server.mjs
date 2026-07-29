@@ -567,13 +567,48 @@ function withPageLock(fn) {
 const pressDelay = () => Math.max(15, Math.round(60 / speed));
 const loopDelay = () => Math.max(15, Math.round(50 / speed));
 
+// Batched presses can open and close a dialogue box between two keys, leaving
+// no trace in the final state. Agents then conclude the NPC said nothing, so
+// every key press records the text that was on screen after it.
+function collectText(seen, s) {
+  if (!s) return;
+  const add = (t) => {
+    if (!t || seen.length >= 40) return;
+    const txt = String(t).slice(0, 200);
+    if (seen[seen.length - 1] !== txt) seen.push(txt);
+  };
+  add(s.dialogue);
+  add(s.battle?.message);
+}
+
+// A press is only queued; the game loop consumes it on a later frame. Waiting
+// a fixed few ms is a race at high speed (pressDelay can be under one frame),
+// which made dialogue that opened and closed inside a batch invisible.
+async function nextFrames(count = 2) {
+  await page.evaluate(
+    (n) =>
+      new Promise((resolve) => {
+        let seen = 0;
+        const tick = () => (++seen >= n ? resolve(null) : requestAnimationFrame(tick));
+        requestAnimationFrame(tick);
+      }),
+    count,
+  );
+}
+
 async function pressKeys(keys) {
+  const textSeen = [];
+  let s = await getState();
+  collectText(textSeen, s);
   for (const k of keys) {
     await page.evaluate((kk) => window.__PM.press(kk), k);
     stats.keysPressed++;
+    await nextFrames();
+    s = await getState();
+    collectText(textSeen, s);
     await page.waitForTimeout(pressDelay());
   }
-  return getState();
+  return { state: s, textSeen };
 }
 
 async function waitMode(mode, timeout = 15000) {
@@ -631,17 +666,19 @@ const posOf = (s) => ({ map: s.map, x: s.x, y: s.y });
 async function walkTiles(dir, tiles) {
   let s = await getState();
   const from = posOf(s);
+  const textSeen = [];
   let walked = 0;
   for (let i = 0; i < tiles; i++) {
     const before = `${s.map}:${s.x},${s.y}`;
     s = await stepOnce(dir);
     stats.tilesWalked++;
+    collectText(textSeen, s);
     const after = `${s.map}:${s.x},${s.y}`;
     if (after !== before) walked++;
-    if (s.mode !== 'overworld') return { state: s, from, to: posOf(s), walked, blocked: false, interrupted: s.mode };
-    if (after === before) return { state: s, from, to: posOf(s), walked, blocked: true };
+    if (s.mode !== 'overworld') return { state: s, from, to: posOf(s), walked, blocked: false, interrupted: s.mode, textSeen };
+    if (after === before) return { state: s, from, to: posOf(s), walked, blocked: true, textSeen };
   }
-  return { state: s, from, to: posOf(s), walked, blocked: false };
+  return { state: s, from, to: posOf(s), walked, blocked: false, textSeen };
 }
 
 async function settle(maxIter = 200) {
@@ -1063,10 +1100,17 @@ function buildReport(status, summary, usage) {
   const agentNotes = events.filter((e) => e.type === 'agent_note');
   const agentMessages = events.filter((e) => e.type === 'agent_message');
   const toolResults = events.filter((e) => e.type === 'tool_result');
+  // File/shell tools the agent used outside the pm_* surface. Reading the game
+  // source turns a blind playthrough into a sighted one, so any of these make
+  // discoverability findings from this run untrustworthy.
+  const outsideTools = events
+    .filter((e) => e.type === 'agent_tool' || e.type === 'agent_shell')
+    .map((e) => e.tool ?? e.command ?? 'unknown');
   const report = {
     meta: { ...RUN_META, speedFinal: speed, endedAt, durationMs, status },
     finalState: lastStatus ? stateSummary(lastStatus) : null,
     stats,
+    outsideToolCalls: outsideTools.slice(0, 40),
     usage: usage ?? null,
     cost: computeCost(usage, RUN_META.model),
     summary: summary ?? null,
@@ -1092,6 +1136,13 @@ function buildReport(status, summary, usage) {
   lines.push(`- duration: ${(durationMs / 1000).toFixed(1)}s | tool calls: ${toolResults.length} | keys: ${stats.keysPressed} | tiles: ${stats.tilesWalked} | battles: ${stats.battlesRun}`);
   if (usage) lines.push(`- tokens: in ${usage.input_tokens ?? '?'} (cached ${usage.cached_input_tokens ?? 0}) / out ${usage.output_tokens ?? '?'}`);
   if (report.cost) lines.push(`- cost: $${report.cost.total.toFixed(2)} (input $${report.cost.inputCost.toFixed(2)} + cached $${report.cost.cachedCost.toFixed(2)} + output $${report.cost.outputCost.toFixed(2)})`);
+  if (outsideTools.length) {
+    lines.push(
+      '',
+      `> **WARNING:** the agent made ${outsideTools.length} tool call(s) outside the pm_* surface (${[...new Set(outsideTools)].slice(0, 6).join(', ')}).`,
+      '> It may have read the game source instead of discovering things by playing. Treat discoverability and UX findings from this run as unverified.',
+    );
+  }
   if (summary) {
     lines.push('');
     lines.push('## Agent Summary');
@@ -1321,13 +1372,16 @@ function summarizeResult(result) {
   const r = { ...result };
   delete r.state;
   if (r.messages) r.messages = r.messages.slice(0, 40);
+  if (r.textSeen) r.textSeen = r.textSeen.slice(0, 20);
   return r;
 }
 
 function describeTool(tool, a, result) {
   switch (tool) {
-    case 'press':
-      return `press [${(a.keys ?? []).join(',')}]`;
+    case 'press': {
+      const t = result?.textSeen?.length ? ` "${result.textSeen[0].slice(0, 56)}"` : '';
+      return `press [${(a.keys ?? []).join(',')}]${t}`;
+    }
     case 'walk':
       return `walk ${a.dir} x${a.tiles} = ${result?.walked ?? 0} tiles -> (${result?.to?.x},${result?.to?.y})${result?.blocked ? ' BLOCKED' : ''}${result?.interrupted ? ` -> ${result.interrupted}` : ''}`;
     case 'battle':
@@ -1396,7 +1450,7 @@ const server = http.createServer(async (req, res) => {
     switch (route) {
       case 'POST /api/press': {
         const keys = body.keys ?? [body.key ?? 'a'];
-        const out = await recordTool('press', { keys }, async () => ({ state: await pressKeys(keys) }));
+        const out = await recordTool('press', { keys }, () => pressKeys(keys));
         return json(res, out.ok ? 200 : 500, out);
       }
       case 'POST /api/walk': {

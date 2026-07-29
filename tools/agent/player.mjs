@@ -11,6 +11,7 @@
 
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createCodexSession } from './codex-engine.mjs';
@@ -104,7 +105,7 @@ function buildPrompt() {
   const howToPlay = auto
     ? `## How to play
 1. ${cfg.resume ? 'Call pm_continue once at the start to resume the existing save, then pm_state to see where you are.' : `Call pm_new_game(seed=${cfg.seed}) once at the start.`}
-2. Use pm_map to see the map grid and plan a route (T=tree, W=water, G=grass with wild encounters, .=floor, ,=path, D=door; NPCs block tiles).
+2. Use pm_map to see the map grid and plan a route (T=tree, W=water, G=grass with wild encounters, .=floor, ,=path, D=door; NPCs block tiles). Most 'D' tiles are decorative housefronts: only the doors listed in the "doors" array with a non-null "to" actually lead anywhere.
 3. Move with pm_walk (chunked, fast). Face NPCs/signs with a direction press, then press "a" to interact. Advance dialogue with "a".
 4. When pm_state shows mode:"battle", call pm_battle to run it automatically.
 5. Menus are navigated with arrows + "a" (confirm) / "b" (cancel). "start" opens the pause menu.
@@ -117,15 +118,15 @@ function buildPrompt() {
 You play like a real player: press buttons and see the result on screen. Every action you take (pm_press, pm_walk) returns the full current screen state - mode, position, party, battle details, menu contents, dialogue, nearby tiles. You do NOT need to call pm_state separately after an action; the result IS the screen.
 
 1. ${cfg.resume ? 'Call pm_continue once at the start to resume the existing save.' : `Call pm_new_game(seed=${cfg.seed}) once at the start.`}
-2. Use pm_map to see the full map grid and plan a route (T=tree, W=water, G=grass with wild encounters, .=floor, ,=path, D=door; NPCs block tiles). The state also includes nearbyTiles, a 5x5 grid around you.
+2. Use pm_map to see the full map grid and plan a route (T=tree, W=water, G=grass with wild encounters, .=floor, ,=path, D=door; NPCs block tiles). Most 'D' tiles are decorative housefronts: only the doors listed in the "doors" array with a non-null "to" actually lead anywhere. NPCs are listed by sprite, so the only way to learn who someone is, is to talk to them. The state also includes nearbyTiles, a 5x5 grid around you.
 3. Move with pm_walk (direction + tile count). It returns your new position plus the full screen state. If a battle or dialogue interrupts, the state shows it.
 4. Press buttons with pm_press. Batch sequences like ["a","down","down","a"] for menu navigation. a = confirm/talk/advance text, b = cancel/back, start = open menu, arrows = move cursor or face a direction.
-5. In battles, navigate the battle menu manually with pm_press. The battle state shows enemy species/HP, your active mon HP, and available moves with type/category/power/PP. Pick moves wisely based on type effectiveness.
-6. Grass tiles ('G') trigger wild battles. Trainers (marked trainer:true in pm_map) battle you when you walk into their line of sight.
-7. The game speed is currently ${cfg.speed}x. Use pm_set_speed to adjust (slow for tricky menus, fast for traversal).
-8. The state includes "objective", the game's own next story step - trust it to know where to go next.
-9. To heal, go to the healPoint shown in state (talk to the nurse). To level up, walk in grass and fight wild battles manually.
-10. Call pm_state only when you want to check the screen without taking an action.`;
+5. Every pm_press and pm_walk result includes "textSeen": every line of dialogue and every battle message that appeared while your keys were being pressed. READ IT. Batching several "a" presses advances past text, so the final state often shows dialogue:null even though an NPC just spoke - textSeen is your only record of what was said. If you want to read something one page at a time, press "a" once per call.
+6. In battles, navigate the battle menu manually with pm_press. The battle state shows enemy species/HP, your active mon HP, and available moves with type/category/power/PP. Pick moves wisely based on type effectiveness.
+7. Grass tiles ('G') trigger wild battles. Trainers (marked trainer:true in pm_map) battle you when you walk into their line of sight.
+8. The game speed is currently ${cfg.speed}x. Use pm_set_speed to adjust (slow for tricky menus, fast for traversal).
+9. The state includes "objective", the game's own next story step - trust it to know where to go next.
+10. To heal, go to the healPoint shown in state (talk to the nurse). To level up, walk in grass and fight wild battles manually. Call pm_state only when you want to check the screen without taking an action.`;
 
   return `${profile.system}
 
@@ -152,6 +153,7 @@ Duplicates are merged automatically, so file each distinct issue once and move o
 
 ## Rules
 - ${debugRule}
+- The game's source code is NOT available to you, and you must not go looking for it. You are running in an empty scratch directory. Do not use file reading, search, or shell tools to find map layouts, NPC scripts, damage formulas or anything else about the game. Everything you are allowed to know comes from the pm_* tools and from what you see on screen. A player cannot read the source, and neither can you: if you do, every finding about discoverability or difficulty from this run becomes worthless.
 - Play autonomously; do not ask the user questions.
 - Keep going across multiple turns if needed.
 
@@ -206,6 +208,32 @@ function continuePrompt(info, turn) {
       : 'If your party is under-levelled, walk in grass and fight wild battles. Remember: end with GOAL_COMPLETE or STUCK when done or blocked.',
   );
   return lines.join('\n');
+}
+
+// The agent runs in an empty scratch directory rather than the repo. Pointing
+// it at REPO_ROOT let it grep src/ for NPC scripts and map layouts, which
+// silently turns a blind playthrough into a sighted one.
+//
+// The directory must live outside the repo: agent CLIs resolve their project
+// root (and their .cursor/mcp.json) by walking up from cwd, so a workspace
+// nested under agent-runs/ still resolves to the repo and stays readable.
+function makeWorkspace() {
+  const dir = path.join(os.tmpdir(), `pm-agent-${cfg.runId}`);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, 'README.md'),
+    [
+      '# Agent scratch workspace',
+      '',
+      'This directory is intentionally empty. The game under test is not here and',
+      'its source code is not available to you. Everything you can know about the',
+      'game comes from the pocketmockster MCP tools.',
+      '',
+      'Use this directory only if you need to jot something down.',
+      '',
+    ].join('\n'),
+  );
+  return dir;
 }
 
 let serverProc = null;
@@ -303,19 +331,26 @@ async function main() {
         console.log(`\x1b[35m[shell]\x1b[0m ${evt.command.slice(0, 160)}`);
         api('/api/log-event', { type: 'agent_shell', command: evt.command, exitCode: evt.exitCode ?? null }).catch(() => {});
         break;
+      case 'agent_tool':
+        console.log(`\x1b[31m[outside-tool]\x1b[0m ${evt.tool} ${String(evt.detail ?? '').slice(0, 120)}`);
+        api('/api/log-event', { type: 'agent_tool', tool: evt.tool, detail: evt.detail ?? null }).catch(() => {});
+        break;
       case 'error':
         api('/api/log-event', { type: 'agent_error', message: evt.message }).catch(() => {});
         break;
     }
   };
 
+  const workspace = makeWorkspace();
+  console.log(`[player] agent workspace: ${workspace} (repo source is out of reach)`);
+
   let engine;
   if (cfg.engine === 'cursor') {
-    const mcpConfigPath = writeMcpConfig(REPO_ROOT, MCP_PATH, PM_URL);
+    const mcpConfigPath = writeMcpConfig(workspace, MCP_PATH, PM_URL);
     console.log(`[player] cursor MCP config: ${mcpConfigPath}`);
-    engine = createCursorSession({ model: cfg.model, cwd: REPO_ROOT, onEvent });
+    engine = createCursorSession({ model: cfg.model, cwd: workspace, onEvent });
   } else {
-    engine = createCodexSession({ model: cfg.model, effort: cfg.effort, cwd: REPO_ROOT, mcpPath: MCP_PATH, pmUrl: PM_URL, onEvent });
+    engine = createCodexSession({ model: cfg.model, effort: cfg.effort, cwd: workspace, mcpPath: MCP_PATH, pmUrl: PM_URL, onEvent });
   }
 
   const deadline = Date.now() + cfg.maxMinutes * 60_000;

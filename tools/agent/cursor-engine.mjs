@@ -16,12 +16,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 /**
- * Write a project-scoped .cursor/mcp.json that exposes the pocketmockster
+ * Write a workspace-scoped .cursor/mcp.json that exposes the pocketmockster
  * MCP server. Merges into an existing file without clobbering other servers.
  * Returns the path to the written file.
  */
-export function writeMcpConfig(repoRoot, mcpPath, pmUrl) {
-  const cursorDir = path.join(repoRoot, '.cursor');
+export function writeMcpConfig(workspaceDir, mcpPath, pmUrl) {
+  const cursorDir = path.join(workspaceDir, '.cursor');
   const configPath = path.join(cursorDir, 'mcp.json');
   fs.mkdirSync(cursorDir, { recursive: true });
 
@@ -42,6 +42,9 @@ export function writeMcpConfig(repoRoot, mcpPath, pmUrl) {
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
   return configPath;
 }
+
+// mcpToolCall is handled on its own path; tool discovery is not a game action.
+const SILENT_TOOL_CALLS = new Set(['mcpToolCall', 'getMcpToolsToolCall']);
 
 /**
  * Parse a single stream-json line into a normalized event.
@@ -101,7 +104,19 @@ export function parseStreamEvent(rawLine) {
           };
         }
       }
-      // getMcpTools and other built-in tool calls — not actionable for our log
+      // Built-in tools (read/grep/shell/...) let the agent inspect the game
+      // source instead of discovering it by playing, so surface them rather
+      // than dropping them. Tool-discovery calls are harmless and stay quiet.
+      if (e.subtype === 'started') {
+        const key = Object.keys(tc).find((k) => k.endsWith('ToolCall') && !SILENT_TOOL_CALLS.has(k));
+        if (key) {
+          return {
+            type: 'agent_tool',
+            tool: key.replace(/ToolCall$/, ''),
+            detail: JSON.stringify(tc[key]?.args ?? {}).slice(0, 200),
+          };
+        }
+      }
       return null;
     }
 
@@ -186,6 +201,8 @@ export function createCursorSession({ model, cwd, onEvent }) {
           } else if (evt.type === 'tool_call') {
             onEvent(evt);
           } else if (evt.type === 'tool_result') {
+            onEvent(evt);
+          } else if (evt.type === 'agent_tool') {
             onEvent(evt);
           } else if (evt.type === 'result') {
             gotResult = true;

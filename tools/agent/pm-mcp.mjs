@@ -48,7 +48,7 @@ server.registerTool(
   'pm_press',
   {
     description:
-      'Press GBA-style buttons. a = confirm/talk/advance text, b = cancel/back, start = open menu, arrows = move cursor or face a direction. Batch multiple keys in one call (e.g. ["down","down","a"]). Returns the full current screen state after all keys are pressed: mode, position, party, battle details, menu contents, dialogue, nearby tiles.',
+      'Press GBA-style buttons. a = confirm/talk/advance text, b = cancel/back, start = open menu, arrows = move cursor or face a direction. Batch multiple keys in one call (e.g. ["down","down","a"]). Returns the full current screen state after all keys are pressed: mode, position, party, battle details, menu contents, dialogue, nearby tiles. Also returns textSeen: every dialogue line and battle message that appeared between keys. Batched "a" presses advance past text, so the final state may show dialogue:null even though an NPC spoke - read textSeen to know what was said.',
     inputSchema: { keys: z.array(KEY).describe('ordered list of keys to press') },
   },
   async ({ keys }) => textResult(await call('/api/press', { keys })),
@@ -58,7 +58,7 @@ server.registerTool(
   'pm_walk',
   {
     description:
-      'Walk in a direction for N tiles. Returns the full current screen state (mode, position, party, battle, menu, dialogue, nearby tiles) plus from/to positions and walked count. Stops early if blocked (blocked:true) or if a battle/dialogue interrupts (interrupted:<mode>). Prefer this over repeated pm_press for movement.',
+      'Walk in a direction for N tiles. Returns the full current screen state (mode, position, party, battle, menu, dialogue, nearby tiles) plus from/to positions, walked count, and textSeen (any dialogue or battle messages that appeared while walking). Stops early if blocked (blocked:true) or if a battle/dialogue interrupts (interrupted:<mode>). Prefer this over repeated pm_press for movement.',
     inputSchema: { direction: DIR, tiles: z.number().int().min(1).max(60) },
   },
   async ({ direction, tiles }) => textResult(await call('/api/walk', { dir: direction, tiles })),
@@ -78,7 +78,7 @@ server.registerTool(
   'pm_map',
   {
     description:
-      'Get the current map grid: tiles (T=tree/wall, W=water, G=grass with wild encounters, .=floor, ,=path, D=door/warp), warps (with destinations), NPC positions, items, signs, and your position. Use it to plan paths around obstacles.',
+      'Get the current map grid: tiles (T=tree/wall, W=water, G=grass with wild encounters, .=floor, ,=path, D=door), warps (with destinations), NPC positions, items, signs, and your position. Use it to plan paths around obstacles. "doors" lists every D tile: those with a non-null "to" are enterable, the rest are decorative housefronts that will just block you. NPCs are listed by the sprite you can see plus trainer:true/false - to learn who an NPC is and what they want, walk up and talk to them.',
     inputSchema: {},
   },
   async () => textResult((await call('/api/map')).map),

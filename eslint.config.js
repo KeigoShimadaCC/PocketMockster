@@ -19,6 +19,7 @@ export default tseslint.config(
         window: 'readonly',
         document: 'readonly',
         localStorage: 'readonly',
+        requestAnimationFrame: 'readonly',
         process: 'readonly',
         setTimeout: 'readonly',
         setInterval: 'readonly',

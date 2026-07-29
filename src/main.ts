@@ -18,6 +18,21 @@ if (seedParam) setSeed(parseInt(seedParam, 10));
 initInput();
 const game = new Game(ctx);
 
+// 'D' tiles look like doors but only the ones backed by a warp lead anywhere;
+// the rest are decorative housefronts. Agents burn turns walking into them
+// unless the difference is explicit.
+function doorTiles(m: Game['map']): { x: number; y: number; to: string | null }[] {
+  const out: { x: number; y: number; to: string | null }[] = [];
+  for (let y = 0; y < m.tiles.length; y++) {
+    for (let x = 0; x < m.tiles[y].length; x++) {
+      if (m.tiles[y][x] !== 'D') continue;
+      const w = m.warps.find((wp) => wp.x === x && wp.y === y);
+      out.push({ x, y, to: w ? w.to : null });
+    }
+  }
+  return out;
+}
+
 // Returns a small tile window around the player for agent screen state.
 function nearbyTilesGrid(g: Game): string[][] | null {
   const tiles = g.map.tiles;
@@ -171,9 +186,12 @@ window.__PM = {
         height: m.tiles.length,
         tiles: m.tiles,
         warps: m.warps.map((w) => ({ x: w.x, y: w.y, to: w.to, tx: w.tx, ty: w.ty })),
+        doors: doorTiles(m),
+        // Sprite, not id: an internal id like "ball_giver" tells the agent what
+        // an NPC does before it ever talks to them.
         npcs: m.npcs
           .filter((n) => game.npcVisible(n))
-          .map((n) => ({ id: n.id, x: n.x, y: n.y, action: n.action ?? null, trainer: !!n.trainer })),
+          .map((n) => ({ x: n.x, y: n.y, sprite: n.spriteKey, trainer: !!n.trainer })),
         items: m.items
           .filter((it) => !game.collectedItems.has(it.id))
           .map((it) => ({ x: it.x, y: it.y, item: it.item, count: it.count })),

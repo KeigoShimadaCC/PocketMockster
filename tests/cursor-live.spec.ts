@@ -7,6 +7,8 @@
 
 import { test, expect } from '@playwright/test';
 import { spawn, type ChildProcess } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { writeMcpConfig, createCursorSession } from '../tools/agent/cursor-engine.mjs';
@@ -84,12 +86,18 @@ test.describe('cursor-agent live e2e', () => {
       test.skip(!LIVE, 'Set PM_CURSOR_LIVE=1 to run');
 
       await api('/api/new-game', { seed: 42, starterIndex: 0, noEncounters: false });
-      writeMcpConfig(REPO_ROOT, MCP_PATH, PM_URL);
+
+      // Agents run in an empty scratch dir outside the repo, so they cannot
+      // read the game source and cursor-agent cannot resolve the repo's own
+      // .cursor/mcp.json by walking up from cwd.
+      const workspace = path.join(os.tmpdir(), `pm-agent-${RUN_ID}`);
+      fs.mkdirSync(workspace, { recursive: true });
+      writeMcpConfig(workspace, MCP_PATH, PM_URL);
 
       const events: any[] = [];
       const engine = createCursorSession({
         model: 'composer-2.5',
-        cwd: REPO_ROOT,
+        cwd: workspace,
         onEvent: (evt) => events.push(evt),
       });
 

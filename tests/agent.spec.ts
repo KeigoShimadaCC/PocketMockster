@@ -274,6 +274,55 @@ test('state includes nearbyTiles grid', async () => {
   expect(center).not.toBe('#');
 });
 
+// Regression: a batch of presses used to return only the final state, so a
+// dialogue that opened and closed between two keys left no trace and agents
+// reported NPCs/signs as mute. Every press must record the text it passed.
+test('batched presses report the text they passed through', async () => {
+  test.setTimeout(60_000);
+  const cur = await api('/api/state');
+  if (cur.raw.mode !== 'overworld') {
+    await api('/api/new-game', { seed: 42, starterIndex: 0, noEncounters: false });
+  }
+  // Stand below the Maple Town sign at (9,9) and read it in one batch.
+  await api('/api/debug', { action: 'warp', args: ['mapletown', 9, 10] });
+  // up = face the sign, a = open the box, a = dismiss it.
+  const r = await api('/api/press', { keys: ['up', 'a', 'a'] });
+  expect(r.ok).toBe(true);
+  expect(Array.isArray(r.textSeen)).toBe(true);
+  expect(r.textSeen.join(' ')).toMatch(/MAPLE TOWN/i);
+  // The batch also dismissed the box, which is exactly why the final state
+  // alone is not enough evidence that the sign spoke.
+  expect(r.state.dialogue).toBeFalsy();
+});
+
+// Regression: 'D' tiles that are not backed by a warp are decorative and
+// solid; agents wasted turns walking into them. Also, NPC internal ids and
+// action names must stay hidden so the agent has to talk to NPCs to learn
+// who they are.
+test('map marks enterable doors and hides NPC internals', async () => {
+  test.setTimeout(60_000);
+  const cur = await api('/api/state');
+  if (cur.raw.mode !== 'overworld') {
+    await api('/api/new-game', { seed: 42, starterIndex: 0, noEncounters: false });
+  }
+  await api('/api/debug', { action: 'warp', args: ['mapletown', 9, 10] });
+  const { map } = await api('/api/map');
+  expect(Array.isArray(map.doors)).toBe(true);
+  // Maple Town has three door tiles; only the lab entrance at (7,8) warps.
+  expect(map.doors.length).toBeGreaterThan(1);
+  const lab = map.doors.find((d: any) => d.x === 7 && d.y === 8);
+  expect(lab?.to).toBe('lab');
+  expect(map.doors.some((d: any) => d.to === null)).toBe(true);
+
+  expect(map.npcs.length).toBeGreaterThan(0);
+  for (const n of map.npcs) {
+    expect(typeof n.sprite).toBe('string');
+    expect(typeof n.trainer).toBe('boolean');
+    expect(n.id).toBeUndefined();
+    expect(n.action).toBeUndefined();
+  }
+});
+
 // Regression: grind must stay on the starting map and not wander through
 // warps to other maps (the old version rotated through all 4 directions).
 test('grind stays on the starting map', async () => {

@@ -100,6 +100,33 @@ test('parseStreamEvent: handles empty/garbled input gracefully', () => {
   expect(parseStreamEvent('{broken')).toBeNull();
 });
 
+// The agent is supposed to learn the game by playing it. If it reaches for a
+// file or shell tool it may be reading the source instead, which invalidates
+// discoverability findings, so those calls must surface as agent_tool.
+test('parseStreamEvent: surfaces non-MCP tool calls as agent_tool', () => {
+  const line = JSON.stringify({
+    type: 'tool_call',
+    subtype: 'started',
+    tool_call: {
+      readToolCall: { args: { path: 'src/content/maps/mapletown.ts' } },
+      toolCallId: 'tc-1',
+    },
+  });
+  const evt = parseStreamEvent(line);
+  expect(evt?.type).toBe('agent_tool');
+  expect(evt!.tool).toBe('read');
+  expect(evt!.detail).toContain('mapletown');
+});
+
+test('parseStreamEvent: does not double-report completed outside tool calls', () => {
+  const line = JSON.stringify({
+    type: 'tool_call',
+    subtype: 'completed',
+    tool_call: { readToolCall: { args: { path: 'src/game.ts' } }, toolCallId: 'tc-1' },
+  });
+  expect(parseStreamEvent(line)).toBeNull();
+});
+
 // ---------- MCP config writer ----------
 
 test('writeMcpConfig: creates fresh config with pocketmockster server', () => {
