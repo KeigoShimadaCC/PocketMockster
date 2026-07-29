@@ -115,4 +115,5 @@ export const route1: GameMap = {
   encounterRate: 0.14,
   signs: [],
   lockedDoors: [],
+  events: [{ x: 5, y: 20, script: 'route1_nibbit_found', once: 'nibbitFound' }],
 };

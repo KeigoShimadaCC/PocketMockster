@@ -42,7 +42,7 @@ export const SCRIPTS: Record<string, ScriptCmd[]> = {
       t: 'choice',
       title: 'Trade with the hiker?',
       options: [
-        { label: 'TRADE', then: [{ t: 'say', lines: ['HIKER: Wonderful! Show me the Mockemon you will trade.'] }] },
+        { label: 'TRADE', then: [{ t: 'questStart', quest: 'hiker_trade' }, { t: 'questAdvance', quest: 'hiker_trade', stage: 'trade' }, { t: 'questComplete', quest: 'hiker_trade' }, { t: 'say', lines: ['HIKER: Wonderful! Show me the Mockemon you will trade.'] }] },
         { label: 'NO THANKS', then: [{ t: 'say', lines: ['HIKER: Maybe next time!'] }] },
       ],
       onCancel: [{ t: 'say', lines: ['HIKER: Maybe next time!'] }],
@@ -66,9 +66,10 @@ export const SCRIPTS: Record<string, ScriptCmd[]> = {
       then: [],
       else: [
         { t: 'setFlag', flag: 'caveDredgeSeen' },
+        { t: 'setFlag', flag: 'fossilDelivered' },
         { t: 'questStart', quest: 'fossil' },
-        { t: 'questAdvance', quest: 'fossil', stage: 'deliver' },
-        { t: 'say', lines: ['You hear the rumble of dredging equipment deeper in the cave.', 'Team Rollback is excavating something here...', 'A fossil sample lies near the dredging site! You pocket it carefully.'] },
+        { t: 'questAdvance', quest: 'fossil', stage: 'revive' },
+        { t: 'say', lines: ['You hear the rumble of dredging equipment deeper in the cave.', 'Team Rollback is excavating something here...', 'A fossil sample lies near the dredging site! You pocket it carefully.', 'Take it to the museum curator in Tidewell for revival!'] },
       ],
     },
   ],
@@ -123,6 +124,8 @@ export const SCRIPTS: Record<string, ScriptCmd[]> = {
             { t: 'say', lines: ['KEEPER: You found the parts! Let me fix the lamp...', '... ... ...', 'The beacon shines once more! Ships can safely reach Tidewell now.'] },
           ],
           else: [
+            { t: 'questStart', quest: 'lighthouse' },
+            { t: 'questAdvance', quest: 'lighthouse', stage: 'parts' },
             { t: 'say', lines: ['KEEPER: The lighthouse lamp went dark!', 'I need replacement parts from Seaside Cave. Can you help?'] },
           ],
         },
@@ -178,6 +181,8 @@ export const SCRIPTS: Record<string, ScriptCmd[]> = {
             { t: 'say', lines: ['FARMER: You saved this season! Take these berries as thanks!'] },
           ],
           else: [
+            { t: 'questStart', quest: 'berries' },
+            { t: 'questAdvance', quest: 'berries', stage: 'collect' },
             { t: 'say', lines: ['FARMER: Pests are ruinin my berry crop on Route 5!', 'Can you gather some healthy ones before they are all gone?'] },
           ],
         },
@@ -483,6 +488,63 @@ export const SCRIPTS: Record<string, ScriptCmd[]> = {
       else: [
         { t: 'say', lines: ['KAI: Seven badges, same as me. The league is close. But first, let me test you!'] },
         { t: 'battle', trainer: 'rival_kai_4', onWin: [{ t: 'setFlag', flag: 'kaiEnc4Won' }, { t: 'say', lines: ['KAI: You are ready. The Victory Trail and Summit Null await. Do not lose before I get there!'] }] },
+      ],
+    },
+  ],
+  cave_lamp_parts: [
+    {
+      t: 'if',
+      flag: 'lampParts',
+      then: [],
+      else: [
+        { t: 'setFlag', flag: 'lampParts' },
+        { t: 'say', lines: ['You found a pile of mechanical parts near the dredging equipment.', 'These look like they could fix a lighthouse lamp!', 'Take them to the lighthouse keeper in Tidewell!'] },
+      ],
+    },
+  ],
+  lost_nibbit_mom: [
+    {
+      t: 'if',
+      flag: 'nibbitReturned',
+      then: [{ t: 'say', lines: ['MOM: My little Nibbit is back home. Thank you again!'] }],
+      else: [
+        {
+          t: 'if',
+          flag: 'nibbitFound',
+          then: [
+            { t: 'setFlag', flag: 'nibbitReturned' },
+            { t: 'questComplete', quest: 'lost_nibbit' },
+            { t: 'giveItem', item: 'moonstone', count: 1 },
+            { t: 'say', lines: ['MOM: You found my Nibbit! Thank you so much!', 'Please, take this Moon Stone as a reward!'] },
+          ],
+          else: [
+            { t: 'questStart', quest: 'lost_nibbit' },
+            { t: 'questAdvance', quest: 'lost_nibbit', stage: 'track' },
+            { t: 'say', lines: ['MOM: My Nibbit ran off again! I think it headed toward Route 1.', 'Can you find it for me? It loves Oran Berries!'] },
+          ],
+        },
+      ],
+    },
+  ],
+  route1_nibbit_found: [
+    {
+      t: 'if',
+      flag: 'nibbitFound',
+      then: [],
+      else: [
+        { t: 'setFlag', flag: 'nibbitFound' },
+        { t: 'say', lines: ['You found a Nibbit hiding in the tall grass!', 'It looks scared but seems to recognize you.', 'Better bring it back to its owner in Verdant City!'] },
+      ],
+    },
+  ],
+  route5_berry_collect: [
+    {
+      t: 'if',
+      flag: 'berriesCollected',
+      then: [],
+      else: [
+        { t: 'setFlag', flag: 'berriesCollected' },
+        { t: 'say', lines: ['You found a patch of healthy berries untouched by pests!', 'You gather a handful. The berry farmer in Bloomrest will be pleased!'] },
       ],
     },
   ],

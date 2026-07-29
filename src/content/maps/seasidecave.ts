@@ -146,5 +146,6 @@ export const seasidecave: GameMap = {
   lockedDoors: [],
   events: [
     { x: 8, y: 11, script: 'cave_dredge_scene', once: 'caveDredgeSeen' },
+    { x: 12, y: 10, script: 'cave_lamp_parts', once: 'lampParts' },
   ],
 };

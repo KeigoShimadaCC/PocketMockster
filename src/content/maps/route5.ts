@@ -142,4 +142,5 @@ export const route5: GameMap = {
     { x: 10, y: 9, text: 'ROUTE 5 - The air grows sweeter heading toward Bloomrest.' },
   ],
   lockedDoors: [],
+  events: [{ x: 7, y: 20, script: 'route5_berry_collect', once: 'berriesCollected' }],
 };
