@@ -16,6 +16,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createCodexSession } from './codex-engine.mjs';
 import { createCursorSession, writeMcpConfig } from './cursor-engine.mjs';
+import { runTurnWithRetry } from './retry.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const PROFILES_PATH = path.join(REPO_ROOT, 'tools', 'agent', 'profiles.json');
@@ -304,11 +305,15 @@ async function main() {
   console.log('[player] pm-server healthy; browser is live');
 
   let lastAgentText = '';
+  // Reset each turn: the completion verdict must come from the final message of
+  // the turn that just ran, never from an earlier one.
+  let turnFinalMessage;
 
   const onEvent = (evt) => {
     switch (evt.type) {
       case 'agent_message':
         lastAgentText = evt.text;
+        turnFinalMessage = evt.text;
         console.log(`\x1b[36m[agent]\x1b[0m ${evt.text.slice(0, 600)}`);
         api('/api/log-event', { type: 'agent_message', text: evt.text }).catch(() => {});
         break;
@@ -353,6 +358,15 @@ async function main() {
     engine = createCodexSession({ model: cfg.model, effort: cfg.effort, cwd: workspace, mcpPath: MCP_PATH, pmUrl: PM_URL, onEvent });
   }
 
+  // A capacity error from the provider used to abort the whole run, including
+  // runs that had already reached their goal.
+  const onRetry = async (err, attempt, wait, maxAttempts) => {
+    const detail = String(err?.message ?? err).slice(0, 200);
+    console.error(`\x1b[31m[player]\x1b[0m transient engine error (attempt ${attempt}/${maxAttempts}): ${detail}`);
+    console.error(`[player] retrying this turn in ${Math.round(wait / 1000)}s`);
+    await api('/api/log-event', { type: 'agent_error', message: `retriable engine error, attempt ${attempt}: ${detail}` }).catch(() => {});
+  };
+
   const deadline = Date.now() + cfg.maxMinutes * 60_000;
   let status = 'max-turns';
 
@@ -368,8 +382,9 @@ async function main() {
     let prompt = buildPrompt();
     for (let turn = 0; turn < cfg.maxTurns; turn++) {
       console.log(`\n[player] === turn ${turn + 1}/${cfg.maxTurns} ===`);
-      const result = await engine.turn(prompt);
-      lastAgentText = result.text;
+      turnFinalMessage = '';
+      const result = await runTurnWithRetry(engine, prompt, { deadline, onRetry });
+      lastAgentText = turnFinalMessage || result.text || lastAgentText;
       console.log(`[player] turn tokens: in=${result.usage.input_tokens ?? '?'} out=${result.usage.output_tokens ?? '?'}`);
 
       if (result.isError) {
@@ -383,7 +398,7 @@ async function main() {
         break;
       }
 
-      const verdict = lastAgentText.trimStart();
+      const verdict = (turnFinalMessage || result.text || '').trimStart();
       if (verdict.startsWith('GOAL_COMPLETE')) {
         status = 'completed';
         break;
@@ -396,6 +411,7 @@ async function main() {
     }
   } catch (err) {
     status = 'error';
+    console.error(`\x1b[31m[player] run failed:\x1b[0m ${String(err?.message ?? err).slice(0, 400)}`);
     lastAgentText = `player error: ${String(err?.message ?? err)}\n\nLast agent message:\n${lastAgentText}`;
   } finally {
     clearInterval(deadlineTimer);

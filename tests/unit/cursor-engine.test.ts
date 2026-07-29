@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { parseStreamEvent, writeMcpConfig } from '../../tools/agent/cursor-engine.mjs';
+import { parseStreamEvent, writeMcpConfig, createCursorSession } from '../../tools/agent/cursor-engine.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES = path.join(__dirname, '..', 'fixtures');
@@ -103,6 +103,61 @@ test('parseStreamEvent: handles empty/garbled input gracefully', () => {
 // The agent is supposed to learn the game by playing it. If it reaches for a
 // file or shell tool it may be reading the source instead, which invalidates
 // discoverability findings, so those calls must surface as agent_tool.
+// End-to-end through the real session, with a stub cursor-agent on PATH: a turn
+// must report the agent's FINAL message. Preferring the cumulative `result`
+// field made a run that emitted "GOAL_COMPLETE" carry on to the next turn.
+test('createCursorSession: turn text is the final message, not the cumulative result', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pm-fake-cursor-'));
+  const lines = [
+    { type: 'system', subtype: 'init', session_id: 's-1', model: 'stub' },
+    { type: 'assistant', message: { content: [{ type: 'text', text: 'I got Sproutle!' }] } },
+    { type: 'assistant', message: { content: [{ type: 'text', text: 'Heading north now.' }] } },
+    { type: 'assistant', message: { content: [{ type: 'text', text: 'GOAL_COMPLETE\n\nI reached Verdant City.' }] } },
+    {
+      type: 'result',
+      is_error: false,
+      result: 'I got Sproutle!\nHeading north now.\nGOAL_COMPLETE\n\nI reached Verdant City.',
+      usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 2, cacheWriteTokens: 0 },
+    },
+  ];
+  // The payload goes in a data file: sh's echo would expand the \n inside the
+  // JSON strings and split each line into invalid JSON.
+  fs.writeFileSync(path.join(dir, 'stream.jsonl'), lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+  const bin = path.join(dir, 'cursor-agent');
+  fs.writeFileSync(bin, '#!/bin/sh\ncat > /dev/null\ncat "$(dirname "$0")/stream.jsonl"\n', { mode: 0o755 });
+
+  const prevBin = process.env.PM_CURSOR_BIN;
+  process.env.PM_CURSOR_BIN = bin;
+  try {
+    const session = createCursorSession({ model: 'stub', cwd: dir, onEvent: () => {} });
+    const turn = await session.turn('play the game');
+    expect(turn.text.startsWith('GOAL_COMPLETE')).toBe(true);
+    expect(turn.isError).toBe(false);
+    expect(turn.usage.input_tokens).toBe(10);
+  } finally {
+    if (prevBin === undefined) delete process.env.PM_CURSOR_BIN;
+    else process.env.PM_CURSOR_BIN = prevBin;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// A turn's `result` field concatenates every interim message the agent emitted,
+// so GOAL_COMPLETE from the final message ends up buried in the middle. The
+// completion protocol checks the start of the final message, which is why the
+// session prefers the last discrete assistant message over `result`.
+test('parseStreamEvent: result text is the whole turn, not just the final message', () => {
+  const line = JSON.stringify({
+    type: 'result',
+    is_error: false,
+    result: 'I got Sproutle!\nHeading north now.\nGOAL_COMPLETE\n\nI reached Verdant City.',
+    usage: { inputTokens: 1, outputTokens: 2, cacheReadTokens: 3, cacheWriteTokens: 4 },
+  });
+  const evt = parseStreamEvent(line);
+  expect(evt?.type).toBe('result');
+  expect(evt!.text.startsWith('GOAL_COMPLETE')).toBe(false);
+  expect(evt!.text).toContain('GOAL_COMPLETE');
+});
+
 test('parseStreamEvent: surfaces non-MCP tool calls as agent_tool', () => {
   const line = JSON.stringify({
     type: 'tool_call',

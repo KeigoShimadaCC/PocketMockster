@@ -170,7 +170,8 @@ export function createCursorSession({ model, cwd, onEvent }) {
     if (sessionId) args.push('--resume', sessionId);
 
     return new Promise((resolve, reject) => {
-      const proc = spawn('cursor-agent', args, {
+      // PM_CURSOR_BIN allows an absolute path when cursor-agent is not on PATH.
+      const proc = spawn(process.env.PM_CURSOR_BIN || 'cursor-agent', args, {
         cwd,
         stdio: ['pipe', 'pipe', 'pipe'],
       });
@@ -210,7 +211,10 @@ export function createCursorSession({ model, cwd, onEvent }) {
             totals.cached_input_tokens += evt.usage.cacheReadTokens;
             totals.output_tokens += evt.usage.outputTokens;
             resolve({
-              text: evt.text || lastAgentText,
+              // e.result concatenates every interim message from the turn, but
+              // the completion protocol is about the agent's final message, so
+              // the last discrete one wins.
+              text: lastAgentText || evt.text,
               usage: { ...totals },
               isError: evt.isError,
             });
