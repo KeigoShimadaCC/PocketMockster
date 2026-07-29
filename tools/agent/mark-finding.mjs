@@ -15,9 +15,11 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { renderFindingsIndexMd } from './findings-index.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const indexPath = path.join(__dirname, '..', '..', 'agent-runs', 'findings-index.json');
+const runsDir = path.join(__dirname, '..', '..', 'agent-runs');
+const indexPath = path.join(runsDir, 'findings-index.json');
 
 const args = process.argv.slice(2);
 if (args.length < 2) {
@@ -53,6 +55,8 @@ if (commit) entry.fixedInCommit = commit;
 if (note) entry.statusNote = note;
 
 fs.writeFileSync(indexPath, JSON.stringify(index, null, 2));
+// The markdown index is what a human actually reads, so it must not lag behind.
+fs.writeFileSync(path.join(runsDir, 'findings-index.md'), renderFindingsIndexMd(index));
 console.log(`Marked ${print} as "${status}"`);
 console.log(`  title: ${entry.title}`);
 if (commit) console.log(`  commit: ${commit}`);

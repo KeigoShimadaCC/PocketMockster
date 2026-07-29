@@ -60,6 +60,9 @@ test.beforeAll(async () => {
       '--profile', 'e2e-script',
       '--goal', 'scripted e2e validation',
       '--headless',
+      // Roll fixture findings up into this run's own dir; they must never land
+      // in the shared cross-run index that real agent runs write to.
+      '--index-dir', RUN_DIR,
     ],
     { stdio: ['ignore', 'pipe', 'pipe'] },
   );
@@ -407,8 +410,16 @@ test('map endpoint, battle loop, notes, finalize and artifacts', async () => {
   expect(fmd).toContain('| # | severity | area | category |');
   expect(fmd).toContain('repro context');
 
-  const index = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'agent-runs', 'findings-index.json'), 'utf8'));
+  // Rolled up into this run's dir via --index-dir, not the shared index.
+  const index = JSON.parse(fs.readFileSync(path.join(RUN_DIR, 'findings-index.json'), 'utf8'));
   expect(Object.values(index).some((e: any) => e.runs.includes(RUN_ID))).toBe(true);
+  expect(fs.readFileSync(path.join(RUN_DIR, 'findings-index.md'), 'utf8')).toContain('Cross-Run Findings Index');
+  // The shared index must be untouched by the suite.
+  const shared = path.join(__dirname, '..', 'agent-runs', 'findings-index.json');
+  if (fs.existsSync(shared)) {
+    const sharedIdx = JSON.parse(fs.readFileSync(shared, 'utf8'));
+    expect(Object.values(sharedIdx).some((e: any) => e.runs.includes(RUN_ID))).toBe(false);
+  }
 
   const lines = fs
     .readFileSync(path.join(RUN_DIR, 'events.jsonl'), 'utf8')

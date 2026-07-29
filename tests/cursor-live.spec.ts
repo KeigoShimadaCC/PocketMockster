@@ -65,6 +65,7 @@ test.describe('cursor-agent live e2e', () => {
         '--profile', 'cursor-live-test',
         '--goal', 'cursor live e2e',
         '--headless',
+        '--index-dir', path.join(REPO_ROOT, 'agent-runs', RUN_ID),
       ],
       { stdio: ['ignore', 'pipe', 'pipe'] },
     );

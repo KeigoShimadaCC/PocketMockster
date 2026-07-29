@@ -14,6 +14,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { chromium } from '@playwright/test';
+import { renderFindingsIndexMd } from './findings-index.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -39,6 +40,10 @@ const PORT = Number(args.port ?? 8787);
 const VITE_PORT = Number(args['vite-port'] ?? 5199);
 const HEADLESS = !!args.headless;
 const FROZEN = !!args.build;
+// The cross-run findings index is the one artifact shared by every run, so the
+// e2e suite points this at its own run dir: its fixture findings were being
+// rolled up as if real agents had reported them.
+const INDEX_DIR = String(args['index-dir'] ?? path.join(REPO_ROOT, 'agent-runs'));
 const RUN_ID = String(args['run-id'] ?? new Date().toISOString().replace(/[:.]/g, '-'));
 const RUN_META = {
   runId: RUN_ID,
@@ -1041,7 +1046,8 @@ function writeFindings() {
 // Cross-run rollup so a fingerprint seen in several runs is obviously the same
 // defect rather than N separate tickets.
 function updateFindingsIndex() {
-  const indexPath = path.join(REPO_ROOT, 'agent-runs', 'findings-index.json');
+  fs.mkdirSync(INDEX_DIR, { recursive: true });
+  const indexPath = path.join(INDEX_DIR, 'findings-index.json');
   let index;
   try {
     index = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
@@ -1059,6 +1065,7 @@ function updateFindingsIndex() {
       totalOccurrences: 0,
       status: 'open',
     };
+    entry.status ??= 'open';
     if (!entry.runs.includes(RUN_ID)) entry.runs.push(RUN_ID);
     entry.totalOccurrences += f.occurrences;
     entry.lastSeenAt = f.lastSeenAt;
@@ -1071,21 +1078,7 @@ function updateFindingsIndex() {
   }
   fs.writeFileSync(indexPath, JSON.stringify(index, null, 2));
 
-  // Write a human-readable markdown summary of the cross-run index
-  const entries = Object.values(index);
-  const statusOrder = { open: 0, regressed: 1, fixed: 2, wontfix: 3 };
-  entries.sort((a, b) => (statusOrder[a.status] ?? 9) - (statusOrder[b.status] ?? 9));
-  const mdLines = ['# Cross-Run Findings Index', ''];
-  const byStatus = entries.reduce((acc, e) => { (acc[e.status] ??= []).push(e); return acc; }, {});
-  mdLines.push(`Total ${entries.length} (` + Object.entries(byStatus).map(([s, l]) => `${l.length} ${s}`).join(', ') + ')', '');
-  mdLines.push('| fingerprint | status | severity | area | title | runs | last seen |');
-  mdLines.push('|---|---|---|---|---|---|---|');
-  for (const e of entries) {
-    mdLines.push(
-      `| \`${e.print}\` | ${e.status} | ${e.severity} | ${e.area} | ${e.title.replace(/\|/g, '/')} | ${e.runs.length} | ${e.lastSeenAt?.slice(0, 10) ?? '-'} |`,
-    );
-  }
-  fs.writeFileSync(path.join(REPO_ROOT, 'agent-runs', 'findings-index.md'), mdLines.join('\n'));
+  fs.writeFileSync(path.join(INDEX_DIR, 'findings-index.md'), renderFindingsIndexMd(index));
 
   return index;
 }
